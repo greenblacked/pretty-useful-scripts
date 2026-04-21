@@ -373,10 +373,12 @@ if (( NEEDS_SUDO == 1 )) && (( DRY_RUN == 0 )); then
   if sudo -v; then
     SUDO_AVAILABLE=1
     ok "sudo authenticated"
-    # keep-alive
+    # keep-alive (disown so EXIT kill does not print bash job "Terminated: 15" noise)
     ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit; done ) &
     SUDO_KEEPALIVE_PID=$!
-    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT
+    disown "$SUDO_KEEPALIVE_PID" 2>/dev/null || disown || true
+    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+          wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT
   else
     err "sudo authentication failed — disabling sudo-requiring steps"
     SKIP_MEMORY=1

@@ -5,8 +5,11 @@ zero to productive — install apps, wire up developer toolchains, and keep it
 clean over time.
 
 All scripts are idempotent: re-running them upgrades in place rather than
-duplicating work. Every script writes a full log to `$TMPDIR` and supports
-`--dry-run` so you can preview the plan before touching anything.
+duplicating work. `install_apps.sh`, `install_devtools.sh`, and
+`stay_fresh.sh` write a full log to `$TMPDIR` and support `--dry-run` so
+you can preview the plan before touching anything. `v1_stay_fresh.sh` is
+deliberately minimal — it runs a fixed, non-interactive sequence and has
+no flags beyond `--help`.
 
 ## Contents
 
@@ -16,7 +19,7 @@ duplicating work. Every script writes a full log to `$TMPDIR` and supports
 | `[install_apps.sh](#install_appssh)`         | Install a curated set of desktop apps (Brave, VS Code, Cursor, OrbStack, Slack, Zoom, Telegram, Spotify) + Google Cloud SDK via Homebrew Cask. |
 | `[install_devtools.sh](#install_devtoolssh)` | Install Python / Terraform / Go / Helm via best-practice version managers (pyenv, tfenv, goenv; or `mise` / `tenv`).                           |
 | `[stay_fresh.sh](#stay_freshsh)`             | Modern macOS housekeeping: purge memory, flush caches, prune Docker, refresh Homebrew + dev toolchains.                                        |
-| `[old_stay_fresh.sh](#old_stay_freshsh)`     | Legacy step list (kernel caches -> brew -> tfenv -> helm -> pyenv -> gvm -> gcloud -> aws), modernized and self-contained.                     |
+| `[v1_stay_fresh.sh](#v1_stay_freshsh)`      | Legacy (“v1”) step list (Quick Look → purge → caches → brew → tfenv → helm → pyenv → gvm → gcloud → aws), modernized and self-contained.       |
 | `[zsh_aliases.zsh](#zsh_aliaseszsh)`         | Opinionated zsh aliases + helper functions, auto-wires pyenv/goenv, and adds shortcuts for the scripts above.                                  |
 
 
@@ -25,7 +28,7 @@ duplicating work. Every script writes a full log to `$TMPDIR` and supports
 On a fresh Mac:
 
 ```bash
-git clone https://github.com/<you>/macos-initial-setup.git ~/scripts/macos-initial-setup
+git clone https://github.com/greenblacked/macos-initial-setup.git ~/scripts/macos-initial-setup
 cd ~/scripts/macos-initial-setup
 chmod +x ./*.sh
 
@@ -231,46 +234,53 @@ then a final summary with:
 
 ---
 
-## `old_stay_fresh.sh`
+## `v1_stay_fresh.sh`
 
-Legacy step list, modernized. Preserves the original order/intent of the
-historical stay-fresh script but is now self-contained (no `~/scripts/functions`
-dependency) and actually clears caches reliably. Use this if you specifically
-want the older, simpler flow; otherwise prefer `stay_fresh.sh`.
+Legacy step list, modernized (same script that used to ship as
+`old_stay_fresh.sh`). Preserves the original order/intent of the historical
+stay-fresh script but is now self-contained — no `~/scripts/functions`
+dependency, no `gvm`/`pyenv` wiring required outside the script. The
+step/next/try reporting helpers are inlined, so you can drop it on any Mac
+and run it as-is. Use this if you specifically want the older, simpler flow;
+otherwise prefer `stay_fresh.sh`.
 
 Steps (in order):
 
-1. Kernel / Quick Look / Finder caches (`qlmanage -r`, `killall Finder`,
-  `update_dyld_shared_cache` when SIP allows)
-2. Purge inactive memory
-3. Clear shell / tool history files (`.lesshst`, `.mysql_history`, `.psql_history`,
-  `.node_repl_history`, `.python_history`)
-4. Clear user caches (`~/Library/Caches`, Logs, Saved State, Xcode DerivedData/Archives,
-  `composer clearcache`)
-5. Update Homebrew (self-heals taps — detects default branch per tap instead of
-  hard-coding `master`)
-6. Upgrade Homebrew formulae + casks
-7. Clean Homebrew caches (`brew cleanup --prune=3 -s`, `autoremove`, `tap --repair`)
-8. List installed Homebrew versions
-9. Terraform update via `tfenv`
-10. Helm update (GitHub latest release)
-11. Python update via `pyenv`
-12. Go update via `gvm`
-13. `gcloud components update`
-14. Print AWS CLI version
+1. Refresh Quick Look & Finder caches (`qlmanage -r`, `killall Finder`)
+2. Purge inactive memory (`sudo purge`)
+3. Clear history leftovers (`~/.lesshst`, `~/.mysql_history`)
+4. Clear user caches (`~/Library/Caches`, Xcode `Archives` and
+  `DerivedData`, `composer clearcache`)
+5. Update Homebrew taps (`git gc` per tap, then `brew update --force`)
+6. Upgrade Homebrew formulae (`brew upgrade`)
+7. Clean Homebrew caches (`brew cleanup --prune=3 -s`, drop `brew --cache`,
+  `brew tap --repair`)
+8. Terraform update via `tfenv`
+9. Helm update (upstream `get-helm-3` installer, latest release)
+10. Python update via `pyenv` (3.x only)
+11. Go update via `gvm`
+12. `gcloud components update`
+13. Print AWS CLI version (no update)
+14. Print free space on `/` (`diskutil info /`)
+
+The home directory is resolved from `dscl` (via `$SUDO_USER` / `id -un`),
+so cache and history paths still point at the invoking user even when the
+script is launched with a sanitized environment (sudo, launchd, etc.).
 
 ### Quick start
 
 ```bash
-./old_stay_fresh.sh                # interactive
-./old_stay_fresh.sh --dry-run
-./old_stay_fresh.sh --yes --no-sudo
+./v1_stay_fresh.sh                 # prompts once for sudo, runs everything
+./v1_stay_fresh.sh --help          # show the built-in help
 ```
 
-Options: `--dry-run`, `--yes` / `-y`, `--no-sudo`, `--help` / `-h`.
+Options: `-h` / `--help`. That's the whole flag surface — there is no
+`--dry-run`, `--yes`, `--no-sudo`, or skip flag. Need any of those? Use
+`stay_fresh.sh` instead.
 
-Missing tools (e.g. no `gvm`, no `tfenv`) are detected and their steps are
-politely skipped rather than failing the whole run.
+Missing tools (e.g. no `gvm`, no `tfenv`, no `composer`) are detected and
+their steps are politely skipped rather than failing the whole run. One
+failing step never aborts the rest of the run.
 
 ---
 
@@ -320,27 +330,35 @@ variable resolves the directory of this file, so the `stay-fresh` /
 
 ## Logs
 
-Every script writes a timestamped log to `$TMPDIR` (or `/tmp`):
+`install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` write a
+timestamped log to `$TMPDIR` (or `/tmp`):
 
 ```
 /tmp/install_apps-YYYYMMDD-HHMMSS.log
 /tmp/install_devtools-YYYYMMDD-HHMMSS.log
 /tmp/stay_fresh-YYYYMMDD-HHMMSS.log
-/tmp/old_stay_fresh-YYYYMMDD-HHMMSS.log
 ```
 
-Pass `--verbose` / `-v` on `install_*` and `stay_fresh.sh` to stream output
-live in addition to logging it.
+Pass `--verbose` / `-v` on those three scripts to stream output live in
+addition to logging it.
+
+`v1_stay_fresh.sh` prints to stdout only — there's no log file. Redirect it
+yourself if you want a transcript (`./v1_stay_fresh.sh 2>&1 | tee
+/tmp/v1_stay_fresh.log`).
 
 ## Safety notes
 
-- Scripts refuse to run as `root`; they ask for `sudo` where needed and keep
-the credential warm for the duration of the run.
-- `--dry-run` is honored everywhere — nothing is changed and no `sudo`
-prompt is triggered.
-- `stay_fresh.sh` and `old_stay_fresh.sh` route all cache-clearing errors to
-the log (not `/dev/null`), so if something refuses to delete you can see
-*why* in the log afterwards.
+- `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` refuse to
+run as `root`; they ask for `sudo` where needed and keep the credential
+warm for the duration of the run.
+- `--dry-run` is honored on those same three scripts — nothing is changed
+and no `sudo` prompt is triggered. `v1_stay_fresh.sh` has no dry-run mode
+and will prompt for `sudo` on startup (it's required for the memory-purge
+step).
+- `stay_fresh.sh` routes all cache-clearing errors to the log (not
+`/dev/null`), so if something refuses to delete you can see *why* in the
+log afterwards. `v1_stay_fresh.sh` prints the same errors inline, tagged
+with `FAILED` next to the offending step.
 
 
 
