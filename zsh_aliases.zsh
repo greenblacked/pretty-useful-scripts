@@ -84,7 +84,9 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 # ================================ convenience =============================
-alias h='history'
+# Keep `h` free for Helm shortcuts below.
+alias hh='history'
+alias hist='history'
 alias c='clear'
 alias reload='exec zsh'
 alias path='echo -e ${PATH//:/\\n}'
@@ -135,12 +137,17 @@ if command -v git >/dev/null 2>&1; then
   # Quick "git wip": stage all and create a throwaway commit
   gwip() { git add --all && git commit -m "wip: ${*:-checkpoint}"; }
 
-  # Prune merged branches (skip main / master / current)
+  # Prune merged branches (skip main / master / current), BSD/GNU compatible.
   gprune() {
     local protected='^(main|master|HEAD)$'
+    local branch
     git branch --merged \
       | grep -vE "(\*|${protected})" \
-      | xargs -r -n 1 git branch -d
+      | while IFS= read -r branch; do
+          branch="${branch#"${branch%%[![:space:]]*}"}"
+          [[ -z "$branch" ]] && continue
+          git branch -d "$branch"
+        done
   }
 fi
 
@@ -254,7 +261,7 @@ fi
 if command -v tofu >/dev/null 2>&1; then
   alias to='tofu'
   alias toi='tofu init'
-  alias top='tofu plan'
+  alias topl='tofu plan'
   alias toa='tofu apply'
 fi
 

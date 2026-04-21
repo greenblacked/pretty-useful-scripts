@@ -1,364 +1,573 @@
 # macos-initial-setup
 
-A small collection of scripts to take a fresh (or tired) macOS machine from
-zero to productive — install apps, wire up developer toolchains, and keep it
-clean over time.
+> Opinionated, idempotent shell scripts for provisioning and maintaining
+> a macOS workstation.
 
-All scripts are idempotent: re-running them upgrades in place rather than
-duplicating work. `install_apps.sh`, `install_devtools.sh`, and
-`stay_fresh.sh` write a full log to `$TMPDIR` and support `--dry-run` so
-you can preview the plan before touching anything. `v1_stay_fresh.sh` is
-deliberately minimal — it runs a fixed, non-interactive sequence and has
-no flags beyond `--help`.
+This repository turns the normal "fresh Mac checklist" — install apps,
+wire up language toolchains, keep caches and Homebrew under control —
+into a set of small, composable scripts that are safe to run today, next
+month, and on the next machine. Every change is previewable with
+`--dry-run`, logged to `$TMPDIR`, and opt-out at a per-feature level.
 
-## Contents
+**Platform:** macOS 12+ (Monterey through the current release) on Apple
+Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
+`zsh` for the aliases file.
 
+## Table of contents
 
-| Script                                       | What it does                                                                                                                                   |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[install_apps.sh](#install_appssh)`         | Install a curated set of desktop apps (Brave, VS Code, Cursor, OrbStack, Slack, Zoom, Telegram, Spotify) + Google Cloud SDK via Homebrew Cask. |
-| `[install_devtools.sh](#install_devtoolssh)` | Install Python / Terraform / Go / Helm via best-practice version managers (pyenv, tfenv, goenv; or `mise` / `tenv`).                           |
-| `[stay_fresh.sh](#stay_freshsh)`             | Modern macOS housekeeping: purge memory, flush caches, prune Docker, refresh Homebrew + dev toolchains.                                        |
-| `[v1_stay_fresh.sh](#v1_stay_freshsh)`      | Legacy (“v1”) step list (Quick Look → purge → caches → brew → tfenv → helm → pyenv → gvm → gcloud → aws), modernized and self-contained.       |
-| `[zsh_aliases.zsh](#zsh_aliaseszsh)`         | Opinionated zsh aliases + helper functions, auto-wires pyenv/goenv, and adds shortcuts for the scripts above.                                  |
+- [TL;DR](#tldr)
+- [Lifecycle: when to run what](#lifecycle-when-to-run-what)
+- [Design principles](#design-principles)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [`install_apps.sh`](#install_appssh)
+- [`install_devtools.sh`](#install_devtoolssh)
+- [`stay_fresh.sh`](#stay_freshsh)
+- [`v1_stay_fresh.sh`](#v1_stay_freshsh)
+- [`zsh_aliases.zsh`](#zsh_aliaseszsh)
+- [What this changes on your machine](#what-this-changes-on-your-machine)
+- [License](#license)
 
+## TL;DR
 
-## Recommended order
-
-On a fresh Mac:
+For returning users. Every command is idempotent.
 
 ```bash
-git clone https://github.com/greenblacked/macos-initial-setup.git ~/scripts/macos-initial-setup
+# First run on a new machine
+./install_apps.sh                        # cask apps + DevOps CLIs + Google Cloud SDK
+./install_devtools.sh --setup-shell      # Python, Terraform, Go, Helm
+
+# Regular maintenance (weekly is a good cadence)
+./stay_fresh.sh                          # purge, cleanup, upgrade, report
+./stay_fresh.sh --dry-run                # preview without changes
+
+# One-off previews
+./install_apps.sh     --dry-run --verbose
+./install_devtools.sh --dry-run --verbose
+```
+
+After linking `zsh_aliases.zsh`, the same three are available as
+`install-apps`, `install-devtools`, and `stay-fresh`.
+
+## Lifecycle: when to run what
+
+The repository is organized around the life of a workstation. Each
+script fills a distinct slot — understanding which slot matters more
+than memorizing flags.
+
+| Phase | Script | Typical cadence | What it touches |
+| --- | --- | --- | --- |
+| **Bootstrap** | `install_apps.sh` | Once per machine | `/Applications`, Homebrew Cask + formulae (e.g. `k9s`, `awscli`), Google Cloud SDK |
+| **Bootstrap** | `install_devtools.sh` | Once per machine (+ version bumps) | `~/.pyenv`, `~/.goenv`, `$(brew --prefix)/bin`, optionally `~/.zshrc` |
+| **Ambient** | `zsh_aliases.zsh` | Sourced on every shell | Your interactive shell only — no disk writes |
+| **Recurring** | `stay_fresh.sh` | Weekly / on demand | Caches, Homebrew, Docker, Xcode, toolchains |
+| **Legacy** | `v1_stay_fresh.sh` | On demand | Minimal subset of the above; no flags |
+
+The two bootstrap scripts are independent — you can run either one
+first. `stay_fresh.sh` assumes Homebrew is installed but degrades
+gracefully if optional tools (Docker, `mise`, `gcloud`, etc.) are
+missing.
+
+## Design principles
+
+These are the invariants every script upholds. They explain why the
+code looks the way it does.
+
+| Principle | What it means in practice |
+| --- | --- |
+| **Idempotent** | Re-running a script upgrades in place. No duplicate installs, no appended shell-rc blocks, no runaway cache. |
+| **Fail-soft** | One failing step never aborts the rest of the run. Missing tools are skipped with a note, not treated as errors. |
+| **Dry-run first** | `--dry-run` is supported on every script that mutates state (except the explicitly minimal `v1_stay_fresh.sh`). No `sudo` prompt is triggered in dry-run. |
+| **Logged** | Every non-trivial script writes a timestamped log to `$TMPDIR`. `--verbose` also streams to the terminal. |
+| **No hidden writes** | Shell rc files are modified only when you pass `--setup-shell`. Every such block is bracketed by markers so it can be found and removed. |
+| **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
+| **Sudo only when needed** | Scripts request `sudo` once at startup, keep it warm for the run, and release it on exit. Running as `root` is refused. |
+
+## Requirements
+
+- macOS 12 (Monterey) or newer, on Apple Silicon or Intel.
+- Administrator password for a single interactive `sudo` prompt (used
+  by `purge` and by Homebrew installs where applicable).
+- Xcode Command Line Tools (`xcode-select --install`).
+- At least 5 GB of free disk space on `/`.
+- An active internet connection to `formulae.brew.sh` and GitHub.
+
+`install_apps.sh` installs Homebrew automatically if it is missing.
+The other scripts assume Homebrew is already on `PATH` — run
+`install_apps.sh` first on a fresh machine, or install Homebrew
+manually from <https://brew.sh>.
+
+## Quick start
+
+On a fresh machine:
+
+```bash
+git clone https://github.com/greenblacked/macos-initial-setup.git \
+  ~/scripts/macos-initial-setup
 cd ~/scripts/macos-initial-setup
 chmod +x ./*.sh
 
-./install_apps.sh                 # 1. apps + gcloud-cli
-./install_devtools.sh --setup-shell   # 2. dev toolchains (also wires ~/.zshrc)
+./install_apps.sh                        # 1. cask apps + DevOps CLIs + Google Cloud SDK
+./install_devtools.sh --setup-shell      # 2. language toolchains
+
 ln -s "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
-echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' >> ~/.zshrc
-exec zsh                          # 3. pick up aliases + pyenv/goenv shims
+echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
+  >> ~/.zshrc
+exec zsh                                 # 3. reload shell with aliases + shims
 ```
 
-After that, run `./stay_fresh.sh` (or `stay-fresh`, aliased) whenever things
-feel sluggish or you want to catch up on upgrades.
+The preflight output of `install_apps.sh` looks like this on a healthy
+machine:
+
+```text
+=== install_apps: preflight checks ===
+[info] log file: /tmp/install_apps-20260421-093014.log
+[ok  ] macOS 14.5 (23F79) on arm64
+[ok  ] bash 3.2.57(1)-release
+[ok  ] running as user: szolotov
+[ok  ] internet reachable (formulae.brew.sh)
+[ok  ] Xcode Command Line Tools: /Library/Developer/CommandLineTools
+[ok  ] free disk space: 184G on /
+[ok  ] Homebrew 4.3.8 (prefix: /opt/homebrew)
+```
+
+If any preflight check fails, the script exits with code `2` and
+prints a pointed message explaining what to fix.
 
 ---
 
 ## `install_apps.sh`
 
-Installs a curated set of desktop apps via Homebrew Cask, plus the Google
-Cloud SDK (`gcloud-cli` cask) with the common components (`kubectl`,
-`gke-gcloud-auth-plugin`).
+Installs desktop applications via Homebrew **Cask**, a batch of **CLI
+formulae** for Kubernetes and platform work (including **`k9s`**), then
+the Google Cloud SDK (`gcloud-cli`) with common components. Cask apps
+already present in `/Applications` but not managed by Homebrew are
+**adopted** (`brew install --cask --force`) so that future upgrades flow
+through `brew` instead of each vendor's auto-updater.
 
-**Preflight** checks: macOS only, not-root, internet reachable, Xcode CLT
-present, at least 5 GB free, Homebrew installed (installs it if missing).
-
-### Quick start
-
-```bash
-./install_apps.sh                 # install everything, interactive
-./install_apps.sh --dry-run       # preview plan, change nothing
-./install_apps.sh --yes           # non-interactive
-```
-
-### Filter which apps
+### Usage
 
 ```bash
-./install_apps.sh --only cursor,slack        # only these
-./install_apps.sh --skip zoom,telegram       # everything except these
-./install_apps.sh --skip-upgrade             # don't upgrade already-installed casks
-./install_apps.sh --skip-gcloud              # skip Google Cloud SDK entirely
+./install_apps.sh                        # full install (interactive)
+./install_apps.sh --dry-run --verbose    # preview and stream details
+./install_apps.sh --yes                  # non-interactive
 ```
+
+### Options
+
+| Flag | Purpose |
+| --- | --- |
+| `--dry-run` | Show the plan; change nothing. |
+| `-y`, `--yes` | Skip confirmation prompts. |
+| `-v`, `--verbose` | Stream `brew` output live (also ran `brew doctor` into the log). |
+| `--only a,b,c` | Install only the listed casks. |
+| `--skip a,b,c` | Install everything except the listed casks. |
+| `--skip-upgrade` | Do not upgrade already-installed casks or formulae. |
+| `--no-cleanup` | Skip `brew cleanup` at the end of the run. |
+| `--skip-gcloud` | Omit the Google Cloud SDK entirely. |
+| `--skip-cli-ops` | Skip the entire Homebrew **formula** batch (see below). |
+| `--skip-formulae a,b,c` | Skip individual formula names (comma-separated). |
+| `--gcloud-components a,b,c` | Override the default component set. |
+| `--no-gcloud-components` | Install `gcloud` core only (no components). |
+| `-h`, `--help` | Show the built-in help (lists every cask and formula). |
+
+### Bundled cask applications
+
+**General use:** `brave-browser`, `visual-studio-code`, `cursor`,
+`orbstack`, `slack`, `zoom`, `telegram`, `spotify`.
+
+**DevOps and platform engineering (GUI):** `iterm2`, `raycast`, `github`,
+`lens`, `postman`, `drawio`, `wireshark-app`, `dbeaver-community`,
+`google-chrome`, `1password`, `microsoft-teams`, `notion`, `tailscale-app`,
+`cloudflare-warp`, `ngrok`, `rectangle`, `alt-tab`, `maccy`, `zed`,
+`sublime-text`, `jetbrains-toolbox`, `fork`, `gitkraken`,
+`azure-data-studio`, `postico`, `redisinsight`, `cyberduck`, `proxyman`,
+`linear-linear`, `discord`.
+
+Pass `--skip a,b,c` to omit casks your organization provisions elsewhere.
+The `ngrok` cask installs a **binary only** (no `.app`).
+
+### Bundled CLI formulae (`brew install`)
+
+Installed after the cask loop unless you pass `--skip-cli-ops`. Includes
+**`k9s`**, **`stern`**, **`kubectx`**, **`kind`**, **`minikube`**, **`skaffold`**,
+**`kustomize`**, **`helm`**, **`helmfile`**, **`krew`**, **`eksctl`**, **`argocd`**,
+**`velero`**, **`cilium-cli`**, **`awscli`**, **`azure-cli`**, **`grpcurl`**,
+**`terraform-docs`**, **`tflint`**, **`terragrunt`**, **`infracost`**, **`conftest`**,
+**`opa`**, **`cosign`**, **`crane`**, **`dive`**, **`lazydocker`**, **`popeye`**,
+**`kubescape`**, **`grype`**, **`trivy`**, **`jq`**, **`yq`**, **`httpie`**, **`hey`**,
+**`vegeta`**.
+
+Homebrew’s core formula named **`flux`** is the Influx query language, not
+Flux CD; for the Flux CD CLI use `brew install fluxcd/tap/flux` separately if
+you need it. **`helm`** is also installed by `install_devtools.sh` — running
+both scripts is safe (idempotent).
 
 ### Google Cloud SDK components
 
-The script installs `gke-gcloud-auth-plugin` and `kubectl` by default. It
-tries `brew install <component>` first and falls back to `gcloud components install <component>` if the component isn't a brew formula.
+By default the script installs `gke-gcloud-auth-plugin` and `kubectl`.
+It prefers `brew install <component>` and falls back to
+`gcloud components install <component>` when the component is not
+packaged as a Homebrew formula.
 
 ```bash
 ./install_apps.sh --gcloud-components gke-gcloud-auth-plugin,kubectl,beta
-./install_apps.sh --no-gcloud-components     # install gcloud core only
+./install_apps.sh --no-gcloud-components
 ```
-
-### Bundled apps
-
-`brave-browser`, `visual-studio-code`, `cursor`, `orbstack`, `slack`, `zoom`,
-`telegram`, `spotify`.
-
-Existing apps already in `/Applications` but not managed by brew are
-**adopted** (`brew install --cask --force`) so future upgrades flow through
-brew.
 
 ### Exit codes
 
-`0` clean · `1` some installs failed · `2` preflight failed · `3` bad args.
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed successfully. |
+| `1` | One or more installs failed. |
+| `2` | Preflight checks failed. |
+| `3` | Invalid arguments. |
 
 ---
 
 ## `install_devtools.sh`
 
-Installs developer toolchains with version managers so you can have multiple
-versions side-by-side:
+Installs developer toolchains using version managers so that multiple
+versions can coexist on the same machine. The script requires Homebrew —
+run `install_apps.sh` first on a fresh machine, or install Homebrew
+manually.
 
-- **Python** via `pyenv` (+ `pyenv-virtualenv`) with macOS build deps
-- **Terraform** via `tfenv` (or `tenv` for Terraform + OpenTofu + Terragrunt)
-- **Go** via `goenv`
-- **Helm** via Homebrew (+ optional plugins: `helm-diff`, `helm-secrets`, `helm-git`)
+### Which manager should I pick?
 
-Or use `**mise`** (ex-rtx) as a unified manager for python/terraform/go in
-one binary.
+| `--manager` | Best for | Installs |
+| --- | --- | --- |
+| `native` *(default)* | Maximum ecosystem fidelity — each tool uses its canonical version manager. | `pyenv` + `tfenv` + `goenv` + Homebrew `helm` |
+| `tenv` | Teams that also need OpenTofu or Terragrunt alongside Terraform. | `pyenv` + `tenv` + `goenv` + Homebrew `helm` |
+| `mise` | A single binary for all language runtimes; fastest switching. | `mise` (Python, Terraform, Go) + Homebrew `helm` |
 
-Requires Homebrew (run `install_apps.sh` first, or the script will refuse).
-Does **not** touch your shell rc unless you pass `--setup-shell`.
+If you are unsure, `native` is the safest choice: each tool behaves
+exactly as its upstream documentation expects.
 
-### Quick start
-
-```bash
-./install_devtools.sh                    # native managers, latest versions, interactive
-./install_devtools.sh --dry-run
-./install_devtools.sh --yes --setup-shell
-```
-
-### Pick a manager
+### Usage
 
 ```bash
-./install_devtools.sh --manager native   # pyenv + tfenv + goenv + brew helm  (default)
-./install_devtools.sh --manager tenv     # tenv instead of tfenv (tofu/tg support)
-./install_devtools.sh --manager mise     # mise for python/terraform/go
+./install_devtools.sh                      # native managers, latest versions (interactive)
+./install_devtools.sh --dry-run            # preview changes
+./install_devtools.sh --yes --setup-shell  # non-interactive; wire ~/.zshrc
 ```
 
-### Pin versions
+### Options
 
-```bash
-./install_devtools.sh --python-version 3.12.5 \
-                      --terraform-version 1.9.5 \
-                      --go-version 1.23.2
+| Flag | Purpose |
+| --- | --- |
+| `--dry-run` | Show the plan; change nothing. |
+| `-y`, `--yes` | Skip confirmation prompts. |
+| `-v`, `--verbose` | Stream `brew`, `pyenv`, and builder output live. |
+| `--setup-shell` | Append initialization lines to `~/.zshrc` or `~/.bashrc`. |
+| `--manager native\|tenv\|mise` | Select a manager stack (default: `native`). |
+| `--python-version V` | Pin Python (default: latest stable 3.x). |
+| `--terraform-version V` | Pin Terraform (default: latest). |
+| `--go-version V` | Pin Go (default: latest). |
+| `--helm-version V` | Pin Helm (default: latest from Homebrew). |
+| `--skip-python` | Do not install Python. |
+| `--skip-terraform` | Do not install Terraform. |
+| `--skip-go` | Do not install Go. |
+| `--skip-helm` | Do not install Helm. |
+| `--helm-plugins a,b,c` | Override the plugin set (default: `helm-diff`). |
+| `--no-helm-plugins` | Do not install any Helm plugins. |
+| `-h`, `--help` | Show the built-in help. |
 
-./install_devtools.sh --skip-python --skip-go   # helm + terraform only
-```
+Known Helm plugin shorthands (`helm-diff`, `helm-secrets`, `helm-git`)
+resolve to their canonical Git URLs; full `https://…` URLs are also
+accepted.
 
-Use `latest` (default) to grab the latest stable for each tool.
+### Shell configuration
 
-### Helm plugins
-
-```bash
-./install_devtools.sh --helm-plugins helm-diff,helm-secrets,helm-git
-./install_devtools.sh --no-helm-plugins
-```
-
-Known shorthands resolve to their canonical git URLs; you can also pass a
-raw `https://…` URL directly.
-
-### Shell wiring
-
-With `--setup-shell`, the script appends the needed init lines to
-`~/.zshrc` (or `~/.bashrc`) — guarded by markers so re-running is safe:
+With `--setup-shell`, the script appends the required initialization
+lines to `~/.zshrc` (or `~/.bashrc`). Each block is bracketed by a
+marker comment so re-running is idempotent and the block can be located
+and removed by hand:
 
 - `pyenv init` + `pyenv virtualenv-init`
 - `goenv init`
-- `tenv` PATH shims (or nothing for tfenv, which lives under `$(brew --prefix)/bin`)
-- `eval "$(mise activate <shell>)"` when `--manager mise`
+- `tenv` PATH shims (not needed for `tfenv`, which lives under
+  `$(brew --prefix)/bin`)
+- `eval "$(mise activate <shell>)"` when `--manager mise` is used
 
-Without the flag, the script prints the exact block to paste.
+Without `--setup-shell`, the script prints the exact block to copy into
+your shell configuration yourself.
 
 ### Exit codes
 
-`0` clean · `1` some installs failed · `2` preflight failed · `3` bad args.
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed successfully. |
+| `1` | One or more installs failed. |
+| `2` | Preflight checks failed. |
+| `3` | Invalid arguments. |
 
 ---
 
 ## `stay_fresh.sh`
 
-One-stop macOS housekeeping. Each step is independent, measures bytes freed,
-and degrades gracefully when a tool is missing or a path is SIP-protected.
+End-to-end macOS housekeeping. Each step is independent, measures the
+disk space freed, and degrades gracefully when a tool is missing or a
+path is protected by System Integrity Protection.
 
-### What it does
+### Steps
 
-1. Purge inactive memory (`sudo purge`)
-2. Flush DNS cache (`dscacheutil` + `mDNSResponder`)
-3. Clear system caches (`/Library/Caches`, writable entries under `/System/Library/Caches`)
-4. Clear user caches (`~/Library/Caches`, Logs, Saved State, Xcode DerivedData, …)
-5. Empty `~/.Trash`
-6. Dev-tool cache cleanup (`npm`, `yarn`, `pnpm`, `pip`, `gem`, `go`, `cargo`)
-7. Docker / OrbStack prune (images, containers, volumes, builder cache)
-8. Xcode extras (Archives, DeviceSupport, stale simulators)
-9. Diagnostic / crash reports (user + system)
-10. Homebrew update + upgrade (formulae and casks) + cleanup + autoremove
-11. `mise self-update` + plugin updates + tool upgrade
-12. Helm plugin updates (`helm plugin update <name>` for every installed plugin)
-13. `gcloud components update`
-14. Report active versions of pyenv / goenv / tfenv / tenv / helm / gcloud
+1. Purge inactive memory (`sudo purge`).
+2. Flush the DNS cache (`dscacheutil`, `mDNSResponder`).
+3. Clear system caches (`/Library/Caches` and writable entries under
+   `/System/Library/Caches`).
+4. Clear user caches (`~/Library/Caches`, Logs, Saved State, Xcode
+   DerivedData, and related paths).
+5. Empty `~/.Trash`.
+6. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
+   `go`, `cargo`).
+7. Prune Docker / OrbStack (images, containers, volumes, builder
+   cache).
+8. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
+9. Remove diagnostic and crash reports (user and system).
+10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
+    `autoremove`.
+11. Run `mise self-update`, update plugins, and upgrade tools.
+12. Update installed Helm plugins.
+13. Run `gcloud components update`.
+14. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
+    and `gcloud`.
 
-### Quick start
+### Usage
 
 ```bash
-./stay_fresh.sh                  # interactive, full run
-./stay_fresh.sh --dry-run        # preview plan
-./stay_fresh.sh --yes --verbose  # non-interactive, stream output live
+./stay_fresh.sh                   # interactive, full run
+./stay_fresh.sh --dry-run         # preview the plan
+./stay_fresh.sh --yes --verbose   # non-interactive; stream output live
+./stay_fresh.sh --brew-greedy     # also upgrade :latest / auto_updates casks
+./stay_fresh.sh --no-sudo         # skip every step that requires sudo
+./stay_fresh.sh --skip-devtools   # skip all dev-tool refresh steps at once
 ```
 
-### Useful toggles
+### Options
 
-```bash
-./stay_fresh.sh --no-sudo                # skip purge/DNS/system caches/system diagnostics
-./stay_fresh.sh --skip-docker --skip-xcode
-
-# Skip all dev-tool refresh steps in one flag:
-./stay_fresh.sh --skip-devtools
-#   = --skip-mise --skip-helm-plugins --skip-gcloud --skip-versions
-
-# Upgrade casks pinned to :latest / auto_updates true (may prompt sudo):
-./stay_fresh.sh --brew-greedy
-```
-
-Full list: `--skip-memory`, `--skip-dns`, `--skip-syscaches`,
-`--skip-usercaches`, `--skip-trash`, `--skip-brew`, `--skip-devcaches`,
-`--skip-docker`, `--skip-xcode`, `--skip-diagnostics`, `--skip-mise`,
-`--skip-helm-plugins`, `--skip-gcloud`, `--skip-versions`, `--no-sudo`.
+| Flag | Purpose |
+| --- | --- |
+| `--dry-run` | Show the plan; change nothing. |
+| `-y`, `--yes` | Skip confirmation prompts. |
+| `-v`, `--verbose` | Stream per-step output live. |
+| `--no-sudo` | Skip `purge`, DNS flush, system caches, and system diagnostics. |
+| `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
+| `--skip-devtools` | Shorthand for `--skip-mise --skip-helm-plugins --skip-gcloud --skip-versions`. |
+| `--skip-memory` | Skip the `sudo purge` step. |
+| `--skip-dns` | Skip the DNS cache flush. |
+| `--skip-syscaches` | Skip system-cache cleanup. |
+| `--skip-usercaches` | Skip user-cache cleanup. |
+| `--skip-trash` | Skip emptying `~/.Trash`. |
+| `--skip-brew` | Skip Homebrew update/upgrade/cleanup. |
+| `--skip-devcaches` | Skip `npm`/`yarn`/`pnpm`/`pip`/`gem`/`go`/`cargo` cache cleanup. |
+| `--skip-docker` | Skip Docker / OrbStack prune. |
+| `--skip-xcode` | Skip Xcode extras cleanup. |
+| `--skip-diagnostics` | Skip diagnostic and crash-report cleanup. |
+| `--skip-mise` | Skip `mise` update. |
+| `--skip-helm-plugins` | Skip Helm plugin updates. |
+| `--skip-gcloud` | Skip `gcloud components update`. |
+| `--skip-versions` | Skip the final version report. |
+| `-h`, `--help` | Show the built-in help. |
 
 ### Output
 
-Prints a per-step plan, runs each step with OK / WARN / FAIL accounting,
-then a final summary with:
+The script prints a per-step plan, runs each step with OK / WARN / FAIL
+accounting, and closes with a summary that includes:
 
-- elapsed wall time
-- `df` delta on `/`
-- sum of per-step deltas (more precise than `df`)
-- which steps passed / warned / were skipped / failed
-- path to the full log file
+- Elapsed wall-clock time.
+- `df` delta on `/`.
+- Sum of per-step deltas (more precise than `df` alone).
+- Which steps passed, warned, were skipped, or failed.
+- Path to the full log file.
 
 ### Exit codes
 
-`0` finished (maybe with warnings) · `1` one or more steps hard-failed ·
-`2` preflight failed · `3` bad args.
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed (possibly with warnings). |
+| `1` | One or more steps hard-failed. |
+| `2` | Preflight checks failed. |
+| `3` | Invalid arguments. |
 
 ---
 
 ## `v1_stay_fresh.sh`
 
-Legacy step list, modernized (same script that used to ship as
-`old_stay_fresh.sh`). Preserves the original order/intent of the historical
-stay-fresh script but is now self-contained — no `~/scripts/functions`
-dependency, no `gvm`/`pyenv` wiring required outside the script. The
-step/next/try reporting helpers are inlined, so you can drop it on any Mac
-and run it as-is. Use this if you specifically want the older, simpler flow;
-otherwise prefer `stay_fresh.sh`.
+The original housekeeping sequence (previously shipped as
+`old_stay_fresh.sh`), preserved for users who prefer the simpler flow.
+It has been modernized to run stand-alone: there is no dependency on
+`~/scripts/functions`, and the `step`/`next`/`try` reporting helpers are
+inlined. Prefer `stay_fresh.sh` unless you specifically need this
+minimal runner.
 
-Steps (in order):
+### Steps
 
-1. Refresh Quick Look & Finder caches (`qlmanage -r`, `killall Finder`)
-2. Purge inactive memory (`sudo purge`)
-3. Clear history leftovers (`~/.lesshst`, `~/.mysql_history`)
-4. Clear user caches (`~/Library/Caches`, Xcode `Archives` and
-  `DerivedData`, `composer clearcache`)
-5. Update Homebrew taps (`git gc` per tap, then `brew update --force`)
-6. Upgrade Homebrew formulae (`brew upgrade`)
-7. Clean Homebrew caches (`brew cleanup --prune=3 -s`, drop `brew --cache`,
-  `brew tap --repair`)
-8. Terraform update via `tfenv`
-9. Helm update (upstream `get-helm-3` installer, latest release)
-10. Python update via `pyenv` (3.x only)
-11. Go update via `gvm`
-12. `gcloud components update`
-13. Print AWS CLI version (no update)
-14. Print free space on `/` (`diskutil info /`)
+1. Refresh Quick Look and Finder caches.
+2. Purge inactive memory (`sudo purge`).
+3. Clear history leftovers (`~/.lesshst`, `~/.mysql_history`).
+4. Clear user caches (`~/Library/Caches`, Xcode Archives and
+   DerivedData, `composer clearcache`).
+5. Update Homebrew taps.
+6. Upgrade Homebrew formulae.
+7. Clean Homebrew caches (`brew cleanup --prune=3 -s`, remove
+   `brew --cache`, `brew tap --repair`).
+8. Update Terraform via `tfenv`.
+9. Update Helm via the upstream `get-helm-3` installer.
+10. Update Python via `pyenv` (3.x only).
+11. Update Go via `gvm`.
+12. Run `gcloud components update`.
+13. Print the AWS CLI version.
+14. Print free space on `/`.
 
-The home directory is resolved from `dscl` (via `$SUDO_USER` / `id -un`),
-so cache and history paths still point at the invoking user even when the
-script is launched with a sanitized environment (sudo, launchd, etc.).
+The invoking user's home directory is resolved via `dscl` (using
+`$SUDO_USER` or `id -un`), so cache paths still target the correct user
+when the script is launched from a sanitized environment such as `sudo`
+or `launchd`.
 
-### Quick start
+### Usage
 
 ```bash
-./v1_stay_fresh.sh                 # prompts once for sudo, runs everything
-./v1_stay_fresh.sh --help          # show the built-in help
+./v1_stay_fresh.sh              # prompts once for sudo, then runs everything
+./v1_stay_fresh.sh --help       # show the built-in help
 ```
 
-Options: `-h` / `--help`. That's the whole flag surface — there is no
-`--dry-run`, `--yes`, `--no-sudo`, or skip flag. Need any of those? Use
-`stay_fresh.sh` instead.
-
-Missing tools (e.g. no `gvm`, no `tfenv`, no `composer`) are detected and
-their steps are politely skipped rather than failing the whole run. One
-failing step never aborts the rest of the run.
+The complete flag surface is `-h` / `--help`. There is no `--dry-run`,
+`--yes`, `--no-sudo`, or skip flag — use `stay_fresh.sh` if any of those
+are required. A failing step never aborts the remainder of the run.
 
 ---
 
 ## `zsh_aliases.zsh`
 
-A curated set of zsh aliases and helper functions. Everything that depends
-on an optional tool (`eza`, `bat`, `fd`, `rg`, `docker`, `kubectl`, `helm`,
-`terraform`, `pyenv`, `goenv`, …) is **guarded behind `command -v`**, so the
-file is safe to source on any machine.
+A curated set of zsh aliases and helper functions. Every optional
+dependency (`eza`, `bat`, `fd`, `rg`, `docker`, `kubectl`, `helm`,
+`terraform`, `pyenv`, `goenv`, and so on) is guarded behind
+`command -v`, so the file is safe to source on any machine regardless
+of which tools are installed.
 
-### Install
+### Installation
 
 ```bash
 ln -s "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
-echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' >> ~/.zshrc
+echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
+  >> ~/.zshrc
 exec zsh
 ```
 
-### Highlights
+### What you get
 
-- **Safety defaults**: `cp`, `mv`, `rm` are `-i` by default (opt out with `\rm`)
-- **Navigation**: `..`, `...`, `....`, `.....`, `-` (cd back), `~`, plus `mkcd`, `up N`
-- **Listing**: `ls`/`l`/`ll`/`la`/`lt` use `eza` when available, fall back to `ls`
-- **Better tools (auto)**: `cat`→`bat`, `find`→`fd`, `grep`→`rg`, `top`→`htop`, `df`→`duf`, `du`→`dust`
-- **Git**: full suite of `g`* aliases (`gs`, `gaa`, `gcm`, `gco`, `gcb`, `gp`, `gpl`, `gl`, …)
-plus `gwip` (stage + checkpoint commit) and `gprune` (delete merged branches)
-- **Docker / compose**: `d`, `dps`, `dprune`, `dc`, `dcu`, `dcd`, `dcl`, …
-- **Kubernetes**: `k`, `kg`, `kd`, `kl`, `kx`, `kns`
-- **Homebrew**: `brewup` (update + upgrade + `--greedy` + cleanup + autoremove)
-- **Python**: auto-inits `pyenv` + `pyenv-virtualenv`; `venv` creates/activates `.venv`
-- **Go**: auto-inits `goenv`, ensures `$GOPATH/bin` on PATH; `gor`, `gob`, `got`, …
-- **Terraform / OpenTofu / Helm**: `tf`*, `to*`, `h*` shortcuts
-- **Script shortcuts**: `stay-fresh`, `install-apps`, `install-devtools`,
-`bootstrap-mac` are auto-wired if the scripts exist next to this file
-- **macOS helpers**: `flushdns`, `purgemem`, `showfiles`/`hidefiles`, `lock`,
-`ejectall`, `localip`, `myip`, `pbj` (pretty-print clipboard JSON)
-- **Functions**: `mkcd`, `extract` (tar/zip/rar/7z/…), `up N`, `mkbackup`, `weather [city]`
+| Category | Highlights |
+| --- | --- |
+| Safety | `cp`, `mv`, `rm` default to `-i` (use `\rm` to bypass). |
+| Navigation | `..`, `...`, `....`, `.....`, `-`, `~`, `mkcd`, `up N`. |
+| Listing | `ls`, `l`, `ll`, `la`, `lt` prefer `eza` when available. |
+| Modern replacements | `cat`→`bat`, `find`→`fd`, `grep`→`rg`, `top`→`htop`, `df`→`duf`, `du`→`dust`. |
+| Git | `gs`, `gaa`, `gcm`, `gco`, `gcb`, `gp`, `gpl`, `gl`, plus `gwip` (stage + checkpoint) and `gprune` (delete merged branches). |
+| Docker / Compose | `d`, `dps`, `dprune`, `dc`, `dcu`, `dcd`, `dcl`. |
+| Kubernetes | `k`, `kg`, `kd`, `kl`, `kx`, `kns`. |
+| Homebrew | `brewup` (`update` + `upgrade --greedy` + `cleanup` + `autoremove`). |
+| Python | Auto-inits `pyenv` + `pyenv-virtualenv`; `venv` creates and activates a local `.venv`. |
+| Go | Auto-inits `goenv`, adds `$GOPATH/bin` to `PATH`; `gor`, `gob`, `got`. |
+| Terraform / OpenTofu / Helm | `tf*`, `to*`, `h*` shortcuts. |
+| Script shortcuts | `stay-fresh`, `install-apps`, `install-devtools` when the scripts are present next to this file. |
+| macOS helpers | `flushdns`, `purgemem`, `showfiles`/`hidefiles`, `lock`, `ejectall`, `localip`, `myip`, `pbj`. |
+| Functions | `mkcd`, `extract`, `up N`, `mkbackup`, `weather [city]`. |
 
-### Customizing
-
-It's a single file — read it top to bottom, comment out anything you don't
-like, or drop your own additions at the bottom. The `_ZSH_ALIASES_DIR`
-variable resolves the directory of this file, so the `stay-fresh` /
-`install-apps` aliases keep working regardless of where the repo lives.
+The `_ZSH_ALIASES_DIR` variable resolves the directory of this file, so
+the script shortcuts keep working regardless of where the repository is
+cloned. The file is designed to be read top to bottom — comment out
+anything you do not want, or append your own additions at the end.
 
 ---
 
-## Logs
+## What this changes on your machine
 
-`install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` write a
-timestamped log to `$TMPDIR` (or `/tmp`):
+A plain-language audit trail of every side effect, grouped by the
+script responsible. Everything below is reversible with standard
+Homebrew / `pyenv` / `goenv` commands.
 
-```
-/tmp/install_apps-YYYYMMDD-HHMMSS.log
-/tmp/install_devtools-YYYYMMDD-HHMMSS.log
-/tmp/stay_fresh-YYYYMMDD-HHMMSS.log
-```
+### `install_apps.sh`
 
-Pass `--verbose` / `-v` on those three scripts to stream output live in
-addition to logging it.
+- Installs Homebrew at `/opt/homebrew` (Apple Silicon) or `/usr/local`
+  (Intel) if it is missing.
+- Installs the casks listed under *Bundled applications*; existing
+  unmanaged apps in `/Applications` are adopted into Homebrew.
+- Installs the `gcloud-cli` cask and the components listed with
+  `--gcloud-components`.
+- Writes `/tmp/install_apps-YYYYMMDD-HHMMSS.log`.
+- Runs `brew cleanup` at the end unless `--no-cleanup` is passed.
+- Does **not** modify any shell configuration files.
 
-`v1_stay_fresh.sh` prints to stdout only — there's no log file. Redirect it
-yourself if you want a transcript (`./v1_stay_fresh.sh 2>&1 | tee
-/tmp/v1_stay_fresh.log`).
+### `install_devtools.sh`
 
-## Safety notes
+- Installs the selected version manager(s): `pyenv`,
+  `pyenv-virtualenv`, `tfenv` or `tenv`, `goenv`, and/or `mise` via
+  Homebrew.
+- Installs Python build dependencies:
+  `openssl readline sqlite3 xz zlib tcl-tk`.
+- Installs the pinned (or latest) versions of Python, Terraform, Go,
+  and Helm under each manager's usual directory (`~/.pyenv`,
+  `~/.goenv`, `$(brew --prefix)/bin`).
+- Installs the configured Helm plugins (default: `helm-diff`).
+- Appends one bracketed block per tool to `~/.zshrc` or `~/.bashrc`
+  **only when `--setup-shell` is passed**. Each block is marked so it
+  can be located and removed by hand.
+- Writes `/tmp/install_devtools-YYYYMMDD-HHMMSS.log`.
 
-- `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` refuse to
-run as `root`; they ask for `sudo` where needed and keep the credential
-warm for the duration of the run.
-- `--dry-run` is honored on those same three scripts — nothing is changed
-and no `sudo` prompt is triggered. `v1_stay_fresh.sh` has no dry-run mode
-and will prompt for `sudo` on startup (it's required for the memory-purge
-step).
-- `stay_fresh.sh` routes all cache-clearing errors to the log (not
-`/dev/null`), so if something refuses to delete you can see *why* in the
-log afterwards. `v1_stay_fresh.sh` prints the same errors inline, tagged
-with `FAILED` next to the offending step.
+### `stay_fresh.sh`
 
+- Deletes cache contents (not the directories themselves) under
+  `/Library/Caches`, writable entries of `/System/Library/Caches`,
+  `~/Library/Caches`, Logs, Saved State, Xcode DerivedData, and related
+  paths.
+- Empties `~/.Trash`.
+- Clears developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
+  `go`, `cargo`).
+- Runs `docker system prune -af --volumes` equivalents and `brew
+  cleanup`/`autoremove` where applicable.
+- Upgrades Homebrew formulae and casks (greedy upgrade only with
+  `--brew-greedy`).
+- Updates `mise`, Helm plugins, and `gcloud` components when those
+  tools are installed.
+- Writes `/tmp/stay_fresh-YYYYMMDD-HHMMSS.log`.
+- Does **not** modify any shell configuration files.
 
+### `v1_stay_fresh.sh`
 
+- Runs the subset of cleanup and toolchain updates listed in its
+  *Steps* section.
+- Deletes `~/.lesshst` and `~/.mysql_history` if present.
+- Writes no log file by default; redirect yourself with `tee` if a
+  transcript is needed:
+
+  ```bash
+  ./v1_stay_fresh.sh 2>&1 | tee /tmp/v1_stay_fresh.log
+  ```
+
+### `zsh_aliases.zsh`
+
+- Affects interactive shells only. Sourcing the file adds aliases and
+  functions to the current shell; it does not write anything to disk
+  and does not modify system files.
+
+### Privileged operations
+
+The three top-level scripts request `sudo` only for the operations
+below. They refuse to run as `root`, prompt once at the start, and
+release the credential on exit.
+
+| Script | Uses `sudo` for |
+| --- | --- |
+| `install_apps.sh` | Cask installs that require admin approval (Homebrew invokes `sudo` internally; the script itself does not escalate). |
+| `install_devtools.sh` | Same as above, only via Homebrew where required. |
+| `stay_fresh.sh` | `purge`, DNS flush, `/Library/Caches` cleanup, system diagnostic cleanup. Pass `--no-sudo` to skip all of these. |
+| `v1_stay_fresh.sh` | `purge`. No way to opt out — use `stay_fresh.sh --no-sudo` instead. |
+
+## License
+
+No explicit license has been applied to this repository. Until a
+`LICENSE` file is added, treat the contents as "all rights reserved"
+under default copyright: use and modification for personal or internal
+purposes is welcome, but redistribution or relicensing requires
+permission from the author.
