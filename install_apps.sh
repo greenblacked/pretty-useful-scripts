@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # install_apps.sh
-# Install a curated set of desktop apps via Homebrew Cask:
-#   Brave, Visual Studio Code, Cursor, OrbStack,
-#   Slack, Zoom, Telegram, Spotify
-# Plus the Google Cloud SDK (gcloud-cli cask) with common components
-# (gke-gcloud-auth-plugin, kubectl).
+# Install a curated set of desktop apps via Homebrew Cask — day-one apps plus
+# DevOps lead / senior tooling (terminals, VPN/mesh, tunnels, K8s/API/DB,
+# HTTP debugging, diagramming, Git, editors, collaboration). Base: Brave, VS Code,
+# Cursor, OrbStack, Slack, Zoom, Telegram, Spotify — plus iTerm2, Raycast,
+# GitHub Desktop, Lens, Postman, draw.io, Wireshark, DBeaver, Chrome, 1Password,
+# Teams, Notion, Tailscale, Cloudflare WARP, ngrok, Rectangle, AltTab, Maccy,
+# Zed, Sublime Text, JetBrains Toolbox, Fork, GitKraken, Azure Data Studio,
+# Postico, Redis Insight, Cyberduck, Proxyman, Linear, Discord.
+# Also installs the Google Cloud SDK (gcloud-cli cask) with common components
+# (gke-gcloud-auth-plugin, kubectl), then a set of Homebrew *formulae* for
+# Kubernetes and platform engineering (k9s, stern, kind, cloud CLIs, policy,
+# supply chain, load tools, …). Skip those with --skip-cli-ops or --skip-formulae.
 #
 # Usage:
 #   ./install_apps.sh [--dry-run] [--yes] [--skip-upgrade]
 #                     [--only app1,app2] [--skip app1,app2]
 #                     [--no-cleanup] [--skip-gcloud]
+#                     [--skip-cli-ops] [--skip-formulae f1,f2]
 #                     [--gcloud-components a,b,c] [--no-gcloud-components]
 #                     [--verbose] [--help]
 #
@@ -60,6 +68,53 @@ CASKS=(
   "zoom|Zoom|zoom.us.app"
   "telegram|Telegram|Telegram.app"
   "spotify|Spotify|Spotify.app"
+  # DevOps / platform lead stack (GUIs and day-to-day ops tools)
+  "iterm2|iTerm2|iTerm.app"
+  "raycast|Raycast|Raycast.app"
+  "github|GitHub Desktop|GitHub Desktop.app"
+  "lens|Lens|Lens.app"
+  "postman|Postman|Postman.app"
+  "drawio|draw.io|draw.io.app"
+  "wireshark-app|Wireshark|Wireshark.app"
+  "dbeaver-community|DBeaver|DBeaver.app"
+  "google-chrome|Google Chrome|Google Chrome.app"
+  "1password|1Password|1Password.app"
+  "microsoft-teams|Microsoft Teams|Microsoft Teams.app"
+  "notion|Notion|Notion.app"
+  # Networking / secure access / tunnels
+  "tailscale-app|Tailscale|Tailscale.app"
+  "cloudflare-warp|Cloudflare WARP|Cloudflare WARP.app"
+  "ngrok|ngrok|"
+  # macOS productivity
+  "rectangle|Rectangle|Rectangle.app"
+  "alt-tab|AltTab|AltTab.app"
+  "maccy|Maccy|Maccy.app"
+  # Editors & Git (beyond VS Code / Cursor / GitHub Desktop)
+  "zed|Zed|Zed.app"
+  "sublime-text|Sublime Text|Sublime Text.app"
+  "jetbrains-toolbox|JetBrains Toolbox|JetBrains Toolbox.app"
+  "fork|Fork|Fork.app"
+  "gitkraken|GitKraken|GitKraken.app"
+  # Multi-cloud data / storage / HTTP debugging
+  "azure-data-studio|Azure Data Studio|Azure Data Studio.app"
+  "postico|Postico|Postico 2.app"
+  "redisinsight|Redis Insight|Redis Insight.app"
+  "cyberduck|Cyberduck|Cyberduck.app"
+  "proxyman|Proxyman|Proxyman.app"
+  # Collaboration & work tracking
+  "linear-linear|Linear|Linear.app"
+  "discord|Discord|Discord.app"
+)
+
+# ---------------------------------------------------------------------------
+# Homebrew formulae (CLIs) — K8s, multi-cloud, Terraform helpers, security, HTTP
+# Do not use formula name "flux" here: core "flux" is Influx's language, not Flux CD.
+# ---------------------------------------------------------------------------
+CLI_FORMULAE=(
+  argocd awscli azure-cli cilium-cli conftest cosign crane dive eksctl grpcurl
+  grype helm helmfile hey httpie infracost jq k9s kind krew kubectx kubescape
+  kustomize lazydocker minikube opa popeye skaffold stern terraform-docs
+  terragrunt tflint trivy velero vegeta yq
 )
 
 # ---------------------------------------------------------------------------
@@ -70,10 +125,12 @@ ASSUME_YES=0
 SKIP_UPGRADE=0
 NO_CLEANUP=0
 SKIP_GCLOUD=0
+SKIP_CLI_OPS=0
 NO_GCLOUD_COMPONENTS=0
 VERBOSE=0
 ONLY_LIST=""
 SKIP_LIST=""
+SKIP_FORMULAE_LIST=""
 GCLOUD_COMPONENTS="gke-gcloud-auth-plugin,kubectl"
 
 LOG_DIR="${TMPDIR:-/tmp}"
@@ -81,7 +138,7 @@ LOG_FILE="$LOG_DIR/install_apps-$(date +%Y%m%d-%H%M%S).log"
 
 usage() {
   cat <<EOF
-${C_BOLD}install_apps.sh${C_RESET} — install a curated set of macOS apps via Homebrew Cask.
+${C_BOLD}install_apps.sh${C_RESET} — Homebrew Cask apps + DevOps CLI formulae + Google Cloud SDK.
 
 ${C_BOLD}Usage:${C_RESET}
   $(basename "$0") [options]
@@ -89,18 +146,20 @@ ${C_BOLD}Usage:${C_RESET}
 ${C_BOLD}Options:${C_RESET}
   --dry-run                Show what would happen, install nothing
   --yes, -y                Don't ask for confirmation
-  --skip-upgrade           Don't upgrade already-installed casks
+  --skip-upgrade           Don't upgrade already-installed casks or formulae
   --only a,b,c             Only operate on these cask ids (comma-separated)
   --skip a,b,c             Skip these cask ids (comma-separated)
   --no-cleanup             Skip 'brew cleanup' at the end
   --skip-gcloud            Skip installing the Google Cloud SDK
+  --skip-cli-ops           Skip the Homebrew formula batch (k9s, awscli, …)
+  --skip-formulae f1,f2    Skip these formula names (comma-separated)
   --gcloud-components a,b  Components to install alongside gcloud-cli
                            (default: ${GCLOUD_COMPONENTS})
   --no-gcloud-components   Don't install any gcloud components
   --verbose, -v            Show brew output live (default: captured to log)
   --help, -h               Show this help
 
-${C_BOLD}Apps:${C_RESET}
+${C_BOLD}Cask apps:${C_RESET}
 EOF
   for entry in "${CASKS[@]}"; do
     local id label
@@ -108,6 +167,15 @@ EOF
     label="$(printf '%s' "$entry" | awk -F'|' '{print $2}')"
     printf "  %-22s %s\n" "$id" "$label"
   done
+  echo
+  echo "${C_BOLD}CLI formulae (brew install):${C_RESET}"
+  local fcols=8 col=0
+  for pkg in "${CLI_FORMULAE[@]}"; do
+    printf '  %-14s' "$pkg"
+    col=$((col + 1))
+    (( col >= fcols )) && { echo; col=0; }
+  done
+  (( col > 0 )) && echo
   echo
   echo "Log file: $LOG_FILE"
 }
@@ -123,6 +191,9 @@ while (( $# > 0 )); do
     --skip=*)        SKIP_LIST="${1#*=}" ;;
     --no-cleanup)             NO_CLEANUP=1 ;;
     --skip-gcloud)            SKIP_GCLOUD=1 ;;
+    --skip-cli-ops)           SKIP_CLI_OPS=1 ;;
+    --skip-formulae)          shift; SKIP_FORMULAE_LIST="${1:-}" ;;
+    --skip-formulae=*)       SKIP_FORMULAE_LIST="${1#*=}" ;;
     --gcloud-components)      shift; GCLOUD_COMPONENTS="${1:-}" ;;
     --gcloud-components=*)    GCLOUD_COMPONENTS="${1#*=}" ;;
     --no-gcloud-components)   NO_GCLOUD_COMPONENTS=1 ;;
@@ -356,6 +427,29 @@ else
   fi
   printf "  %-22s %-26s %b\n" "gcloud-cli" "Google Cloud SDK" "$gcloud_status"
 fi
+
+if (( SKIP_CLI_OPS )); then
+  printf "  %-22s %-26s %b\n" "(formulae)" "DevOps / K8s CLIs" "$C_DIM skipping (--skip-cli-ops)$C_RESET"
+else
+  bold "CLI formulae ($((${#CLI_FORMULAE[@]})) packages):"
+  printf "  %-22s %s\n" "FORMULA" "STATUS"
+  printf "  %-22s %s\n" "-------" "------"
+  for pkg in "${CLI_FORMULAE[@]}"; do
+    [[ -z "$pkg" ]] && continue
+    if [[ -n "$SKIP_FORMULAE_LIST" ]] && in_list "$pkg" "$SKIP_FORMULAE_LIST"; then
+      printf "  %-22s %b\n" "$pkg" "$C_DIM skipped (--skip-formulae)$C_RESET"
+      continue
+    fi
+    fstat=""
+    if brew list --versions "$pkg" >/dev/null 2>&1; then
+      fstat="$C_YELLOW installed -> will upgrade$C_RESET"
+      (( SKIP_UPGRADE )) && fstat="$C_DIM installed -> skipping$C_RESET"
+    else
+      fstat="$C_GREEN new -> install$C_RESET"
+    fi
+    printf "  %-22s %b\n" "$pkg" "$fstat"
+  done
+fi
 hr
 
 if (( DRY_RUN )); then
@@ -469,6 +563,63 @@ for entry in "${TARGETS[@]}"; do
     FAILED+=("$label (install)")
   fi
 done
+
+# ---------------------------------------------------------------------------
+# install Homebrew formulae (K8s / cloud / Terraform / security CLIs)
+# ---------------------------------------------------------------------------
+if (( SKIP_CLI_OPS == 0 )); then
+  hr
+  step "Installing DevOps / platform CLI tools (${#CLI_FORMULAE[@]} formulae)..."
+  f_total=${#CLI_FORMULAE[@]}
+  f_idx=0
+  for pkg in "${CLI_FORMULAE[@]}"; do
+    f_idx=$((f_idx + 1))
+    [[ -z "$pkg" ]] && continue
+    if [[ -n "$SKIP_FORMULAE_LIST" ]] && in_list "$pkg" "$SKIP_FORMULAE_LIST"; then
+      continue
+    fi
+    if ! brew info "$pkg" >/dev/null 2>&1; then
+      err "formula '$pkg' not found in Homebrew — skipping"
+      FAILED+=("$pkg (formula not found)")
+      continue
+    fi
+    t_start=$(date +%s)
+    hr
+    step "[$f_idx/$f_total] brew formula: $pkg"
+    if brew list --versions "$pkg" >/dev/null 2>&1; then
+      cur_v="$(brew list --versions "$pkg" | awk '{print $2}')"
+      if (( SKIP_UPGRADE )); then
+        ok "$pkg already installed ($cur_v) — --skip-upgrade set, leaving it"
+        SKIPPED+=("$pkg ($cur_v)")
+        continue
+      fi
+      info "upgrading $pkg (current: $cur_v)..."
+      if run_brew "$LOG_FILE" brew upgrade "$pkg"; then
+        new_v="$(brew list --versions "$pkg" | awk '{print $2}')"
+        if [[ "$cur_v" == "$new_v" ]]; then
+          ok "$pkg already up-to-date ($cur_v) [$(human_duration $(( $(date +%s) - t_start )))]"
+          SKIPPED+=("$pkg ($cur_v)")
+        else
+          ok "$pkg upgraded: $cur_v -> $new_v [$(human_duration $(( $(date +%s) - t_start )))]"
+          UPGRADED+=("$pkg ($cur_v -> $new_v)")
+        fi
+      else
+        err "brew upgrade $pkg failed — see $LOG_FILE"
+        FAILED+=("$pkg (formula upgrade)")
+      fi
+    else
+      info "installing $pkg..."
+      if run_brew "$LOG_FILE" brew install "$pkg"; then
+        new_v="$(brew list --versions "$pkg" 2>/dev/null | awk '{print $2}')"
+        ok "$pkg installed${new_v:+ ($new_v)} [$(human_duration $(( $(date +%s) - t_start )))]"
+        INSTALLED+=("$pkg${new_v:+ ($new_v)}")
+      else
+        err "brew install $pkg failed — see $LOG_FILE"
+        FAILED+=("$pkg (formula install)")
+      fi
+    fi
+  done
+fi
 
 # ---------------------------------------------------------------------------
 # install Google Cloud SDK (cask 'gcloud-cli') + components
