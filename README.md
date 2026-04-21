@@ -26,7 +26,6 @@ Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
 - [`v1_stay_fresh.sh`](#v1_stay_freshsh)
 - [`zsh_aliases.zsh`](#zsh_aliaseszsh)
 - [What this changes on your machine](#what-this-changes-on-your-machine)
-- [License](#license)
 
 ## TL;DR
 
@@ -563,11 +562,3 @@ release the credential on exit.
 | `install_devtools.sh` | Same as above, only via Homebrew where required. |
 | `stay_fresh.sh` | `purge`, DNS flush, `/Library/Caches` cleanup, system diagnostic cleanup. Pass `--no-sudo` to skip all of these. |
 | `v1_stay_fresh.sh` | `purge`. No way to opt out — use `stay_fresh.sh --no-sudo` instead. |
-
-## License
-
-No explicit license has been applied to this repository. Until a
-`LICENSE` file is added, treat the contents as "all rights reserved"
-under default copyright: use and modification for personal or internal
-purposes is welcome, but redistribution or relicensing requires
-permission from the author.
