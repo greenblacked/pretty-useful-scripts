@@ -145,6 +145,14 @@ Requires detect-internet to be enabled on the interface — run
 Edit `WanInterface` at the top of the script if your WAN port isn't
 `ether1`.
 
+## Docker integration tests (CHR 7.22)
+
+To validate all scripts on **real RouterOS 7.22** inside Docker (QEMU + official CHR
+image), use [`tests/README.md`](tests/README.md) and from the repo root run
+`./mikrotik/tests/run.sh`. This is the closest practical “emulation” of your router:
+MikroTik does not ship a standalone script interpreter, so the tests talk to a live
+CH instance over the API.
+
 ## RouterOS 7.22 notes & gotchas
 
 - RouterOS scripts use `/` for paths and `:` for built-in commands
