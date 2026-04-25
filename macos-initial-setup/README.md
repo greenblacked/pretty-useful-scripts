@@ -70,7 +70,7 @@ than memorizing flags.
 | --- | --- | --- | --- |
 | **Bootstrap** | `install_apps.sh` | Once per machine | `/Applications`, Homebrew Cask + formulae (e.g. `k9s`, `awscli`), Google Cloud SDK |
 | **Bootstrap** | `install_devtools.sh` | Once per machine (+ version bumps) | `~/.pyenv`, `~/.goenv`, `$(brew --prefix)/bin`, optionally `~/.zshrc` |
-| **Ambient** | `zsh_aliases.zsh` | Sourced on every shell | Your interactive shell only — no disk writes |
+| **Ambient** | `zsh_aliases.zsh` | Sourced on every interactive shell (after wiring into `~/.zshrc`) | Your shell only — no disk writes |
 | **Recurring** | `stay_fresh.sh` | Weekly / on demand | Caches, Homebrew, Docker, Xcode, toolchains |
 | **Legacy** | `v1_stay_fresh.sh` | On demand | Minimal subset of the above; no flags |
 
@@ -116,17 +116,17 @@ On a fresh machine:
 git clone https://github.com/greenblacked/pretty-usuful-scripts.git \
   ~/scripts/pretty-usuful-scripts
 cd ~/scripts/pretty-usuful-scripts/macos-initial-setup
-chmod +x ./*.sh
 
-./install_apps.sh --dry-run
-./install_devtools.sh --dry-run
+./install_apps.sh     --dry-run --verbose
+./install_devtools.sh --dry-run --verbose
 
 ./install_apps.sh                        # 1. cask apps + DevOps CLIs + Google Cloud SDK
 ./install_devtools.sh --setup-shell      # 2. language toolchains
 
-ln -s "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
-echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
-  >> ~/.zshrc
+ln -sfn "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
+grep -qsF '.zsh_aliases.zsh' ~/.zshrc \
+  || echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
+       >> ~/.zshrc
 exec zsh                                 # 3. reload shell with aliases + shims
 ```
 
@@ -173,7 +173,7 @@ through `brew` instead of each vendor's auto-updater.
 | --- | --- |
 | `--dry-run` | Show the plan; change nothing. |
 | `-y`, `--yes` | Skip confirmation prompts. |
-| `-v`, `--verbose` | Stream `brew` output live (also ran `brew doctor` into the log). |
+| `-v`, `--verbose` | Stream `brew` output live (also runs `brew doctor` into the log). |
 | `--only a,b,c` | Install only the listed casks. |
 | `--skip a,b,c` | Install everything except the listed casks. |
 | `--skip-upgrade` | Do not upgrade already-installed casks or formulae. |
@@ -212,7 +212,7 @@ Installed after the cask loop unless you pass `--skip-cli-ops`. Includes
 **`kubescape`**, **`grype`**, **`trivy`**, **`jq`**, **`yq`**, **`httpie`**, **`hey`**,
 **`vegeta`**.
 
-Homebrew’s core formula named **`flux`** is the Influx query language, not
+Homebrew's core formula named **`flux`** is the Influx query language, not
 Flux CD; for the Flux CD CLI use `brew install fluxcd/tap/flux` separately if
 you need it. **`helm`** is also installed by `install_devtools.sh` — running
 both scripts is safe (idempotent).
@@ -450,6 +450,17 @@ The complete flag surface is `-h` / `--help`. There is no `--dry-run`,
 `--yes`, `--no-sudo`, or skip flag — use `stay_fresh.sh` if any of those
 are required. A failing step never aborts the remainder of the run.
 
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed normally, including `--help`. Per-step failures are reported in the output but do not change this. |
+| `1` | Bootstrap failure: cannot determine a usable home directory. |
+| `2` | Invalid arguments. |
+
+If you need hard-fail semantics on per-step failures, use
+`stay_fresh.sh` instead.
+
 ---
 
 ## `zsh_aliases.zsh`
@@ -463,11 +474,16 @@ of which tools are installed.
 ### Installation
 
 ```bash
-ln -s "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
-echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
-  >> ~/.zshrc
+ln -sfn "$PWD/zsh_aliases.zsh" "$HOME/.zsh_aliases.zsh"
+grep -qsF '.zsh_aliases.zsh' ~/.zshrc \
+  || echo '[[ -f "$HOME/.zsh_aliases.zsh" ]] && source "$HOME/.zsh_aliases.zsh"' \
+       >> ~/.zshrc
 exec zsh
 ```
+
+Re-running the block is safe: `ln -sfn` overwrites the symlink in place,
+and the `grep` guard ensures the `source` line is appended to `~/.zshrc`
+only once.
 
 ### What you get
 
