@@ -109,6 +109,19 @@ The MikroTik package is [`mikrotik/`](mikrotik/), verified against
 - `reboot-and-flush.lua` — flushes DNS cache + connection tracking, then
   reboots. Pair with the README's optional `notify-boot` startup scheduler
   for a "back online" alert after each reboot.
+- `dhcp_lease_watch.lua` — alerts on new MACs, duplicate hostnames, and
+  lease churn; optionally tags new lease IPs into address-list
+  `dhcp-watch-new`.
+- `firewall_drift.lua` + `firewall_drift_baseline.lua` — snapshots
+  `/ip firewall filter` and `nat` rule signatures and alerts on additions,
+  removals, or critical-rule reordering; the helper script clears the
+  baseline after intentional changes.
+- `mac_allowlist_dhcp.lua` — flags (and optionally blocks via address-list
+  + filter rule) DHCP leases whose MAC is not on `:global MAC_ALLOWLIST`.
+  Fail-safe: refuses to act when the allowlist is empty.
+- `rogue_dns_check.lua` — verifies upstream DNS sanity and detects clients
+  using non-approved DNS resolvers; tags offenders into
+  `rogue-dns-clients`.
 
 See [`mikrotik/README.md`](mikrotik/README.md) for installation, policy
 flags, suggested scheduler entries, and RouterOS 7.22-specific gotchas

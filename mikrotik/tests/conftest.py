@@ -67,7 +67,7 @@ def api(ros_pool: routeros_api.RouterOsApiPool) -> Any:
 
 
 def _row_id(row: dict) -> str:
-    for key in (".id", b".id"):
+    for key in (".id", b".id", "id", b"id"):
         if key in row:
             v = row[key]
             return v.decode() if isinstance(v, bytes) else str(v)
@@ -97,21 +97,74 @@ def _remove_named_scripts(api: Any, predicate) -> int:
     return removed
 
 
+# Scripts that tests install under their production names (so :parse [/system
+# script get NAME] works). These are removed before and after the test session
+# in case a previous run was interrupted.
+_PRODUCTION_NAMED_TEST_SCRIPTS = {
+    "wan_failover_notify",
+    "health_check",
+    "detect_internet",
+    "dhcp_lease_watch",
+    "firewall_drift",
+    "firewall_drift_baseline",
+    "mac_allowlist_dhcp",
+    "rogue_dns_check",
+}
+
+# Globals tests touch via /system/script/environment. Cleaned at session
+# boundaries to avoid leakage between runs (RouterOS keeps :globals across
+# scheduler runs within an uptime session).
+_TEST_OWNED_GLOBALS = (
+    "pu_TG_LAST_MESSAGE",
+    "FW_BASELINE",
+    "DHCP_KNOWN_MACS",
+    "DHCP_PREV_LEASE_COUNT",
+    "DHCP_CHURN_FLAG",
+    "DHCP_DUPS_FLAG",
+    "MAC_ALLOWLIST",
+    "MACALLOW_LAST_FLAG",
+    "DNS_EXPECTED",
+    "DNS_ALLOWED_RESOLVERS",
+    "RDNS_LAST_FLAG",
+)
+
+
+def _remove_globals(api: Any, names) -> None:
+    res = api.get_binary_resource("/system/script/environment")
+    rows = list(res.get())
+    for row in rows:
+        if _row_str(row, "name") in names:
+            try:
+                res.call("remove", {".id": _row_id(row)})
+            except ros_exc.RouterOsApiError:
+                pass
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _clean_router_state(api: Any) -> Iterator[None]:
-    """Wipe any leftover test scripts and install the tg_send stub for the session."""
+    """Wipe any leftover test scripts/globals and install the tg_send stub for the session."""
     _remove_named_scripts(
-        api, lambda n: n.startswith(TEST_SCRIPT_PREFIX) or n in {TG_SEND_NAME, "wan_failover_notify", "health_check"}
+        api,
+        lambda n: n.startswith(TEST_SCRIPT_PREFIX)
+        or n in ({TG_SEND_NAME} | _PRODUCTION_NAMED_TEST_SCRIPTS),
     )
+    _remove_globals(api, _TEST_OWNED_GLOBALS)
     api.get_binary_resource("/system/script").call(
-        "add", {"name": TG_SEND_NAME, "source": TG_SEND_STUB_SOURCE}
+        "add",
+        {
+            "name": TG_SEND_NAME.encode("utf-8"),
+            "source": TG_SEND_STUB_SOURCE.encode("utf-8"),
+        },
     )
     try:
         yield
     finally:
         _remove_named_scripts(
-            api, lambda n: n.startswith(TEST_SCRIPT_PREFIX) or n in {TG_SEND_NAME, "wan_failover_notify", "health_check"}
+            api,
+            lambda n: n.startswith(TEST_SCRIPT_PREFIX)
+            or n in ({TG_SEND_NAME} | _PRODUCTION_NAMED_TEST_SCRIPTS),
         )
+        _remove_globals(api, _TEST_OWNED_GLOBALS)
 
 
 @pytest.fixture
