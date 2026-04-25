@@ -26,6 +26,7 @@ work.
 | --- | --- |
 | [`macos-initial-setup/`](macos-initial-setup/) | Bootstrap a fresh macOS workstation, install common apps and developer tools, keep Homebrew/toolchains fresh, and load useful zsh aliases. |
 | [`mikrotik/`](mikrotik/) | RouterOS 7.x scripts for backups, WiFi password rotation, WAN-state monitoring, health checks, and Telegram notifications. |
+| [`k8s-toolbox/`](k8s-toolbox/) | A Docker-built Kubernetes toolbox image for debugging and one-off ops, with `kubectl`, `helm`, `kustomize`, and GKE-focused `gcloud`. |
 
 ## Quick start
 
