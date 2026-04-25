@@ -252,6 +252,10 @@ image), use [`tests/README.md`](tests/README.md) and from the repo root run
 MikroTik does not ship a standalone script interpreter, so the tests talk to a live
 CH instance over the API.
 
+The macOS setup scripts in this repo have a **separate** lightweight Docker
+harness (syntax + ShellCheck only, no Homebrew) — see
+[`macos-initial-setup/README.md`](../macos-initial-setup/README.md#development--docker-checks).
+
 ## RouterOS 7.22 notes & gotchas
 
 - RouterOS scripts use `/` for paths and `:` for built-in commands

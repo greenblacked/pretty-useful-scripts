@@ -18,6 +18,7 @@ work.
 - [Script guidelines](#script-guidelines)
 - [macOS setup at a glance](#macos-setup-at-a-glance)
 - [MikroTik scripts at a glance](#mikrotik-scripts-at-a-glance)
+- [Testing (Docker)](#testing-docker)
 
 ## What's here
 
@@ -126,3 +127,14 @@ The MikroTik package is [`mikrotik/`](mikrotik/), verified against
 See [`mikrotik/README.md`](mikrotik/README.md) for installation, policy
 flags, suggested scheduler entries, and RouterOS 7.22-specific gotchas
 (TLS CAs, `:global` lifetime, `wifi` vs `wireless`, etc.).
+
+## Testing (Docker)
+
+Two folders ship **self-contained** Docker-based checks. You only need the
+Docker Engine and Compose v2 on the host — no local Python, shellcheck, or
+RouterOS install.
+
+| Package | What runs | How |
+| --- | --- | --- |
+| [`macos-initial-setup/`](macos-initial-setup/) | **Static** checks on the bash scripts and `zsh_aliases.zsh` (syntax, ShellCheck, `--help`, Linux “macOS only” preflight, zsh can source aliases). Does **not** install apps or run Homebrew — the scripts are macOS-only. | [`macos-initial-setup/README.md#development--docker-checks`](macos-initial-setup/README.md#development--docker-checks) — `./macos-initial-setup/tests/run.sh` |
+| [`mikrotik/`](mikrotik/) | **Integration** tests against a real **RouterOS 7.22 CHR** in QEMU, API-driven `pytest`. | [`mikrotik/tests/README.md`](mikrotik/tests/README.md) — `./mikrotik/tests/run.sh` |

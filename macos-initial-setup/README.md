@@ -28,6 +28,7 @@ Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
 - [`v1_stay_fresh.sh`](#v1_stay_freshsh)
 - [`zsh_aliases.zsh`](#zsh_aliaseszsh)
 - [What this changes on your machine](#what-this-changes-on-your-machine)
+- [Development: Docker checks](#development--docker-checks)
 
 ## TL;DR
 
@@ -59,6 +60,7 @@ After linking `zsh_aliases.zsh`, the same three are available as
 | `stay_fresh.sh` | Recurring maintenance: cleanup, updates, cache pruning, and version reporting. |
 | `v1_stay_fresh.sh` | Legacy minimal maintenance flow kept for reference and simple one-off runs. |
 | `zsh_aliases.zsh` | Optional interactive-shell aliases and helper functions. |
+| `tests/` | Docker-based **static** checks (ShellCheck, `bash -n`, CLI smoke tests). See [Development: Docker checks](#development--docker-checks). |
 
 ## Lifecycle: when to run what
 
@@ -113,8 +115,8 @@ manually from <https://brew.sh>.
 On a fresh machine:
 
 ```bash
-git clone https://github.com/greenblacked/pretty-usuful-scripts.git
-cd pretty-usuful-scripts/macos-initial-setup
+git clone https://github.com/greenblacked/pretty-useful-scripts.git
+cd pretty-useful-scripts/macos-initial-setup
 
 ./install_apps.sh     --dry-run --verbose
 ./install_devtools.sh --dry-run --verbose
@@ -507,6 +509,44 @@ The `_ZSH_ALIASES_DIR` variable resolves the directory of this file, so
 the script shortcuts keep working regardless of where the repository is
 cloned. The file is designed to be read top to bottom — comment out
 anything you do not want, or append your own additions at the end.
+
+---
+
+## Development: Docker checks
+
+These scripts target macOS, but a **small Linux container** can still verify
+syntax, ShellCheck, `--help`, the documented exit codes, and that
+`zsh_aliases.zsh` sources cleanly in `zsh`. You need **Docker** with the
+**Compose v2** plugin; nothing else on the host.
+
+From the **repository root**:
+
+```bash
+./macos-initial-setup/tests/run.sh
+```
+
+Same thing without the wrapper:
+
+```bash
+docker compose -f macos-initial-setup/tests/docker-compose.yml run --rm tester
+```
+
+The `tester` image (`tests/tester/Dockerfile`) installs `bash`, `shellcheck`,
+and `zsh`, mounts the repo read-only at `/repo`, and runs
+`tests/test_macos_initial_setup.sh`.
+
+| Check | Notes |
+| --- | --- |
+| `bash -n` | All `*.sh` in this directory. |
+| ShellCheck | `--severity=error` for the bash scripts. Debian’s stock ShellCheck may not ship a `zsh` dialect — the harness then **skips** `zsh` ShellCheck but still **sources** `zsh_aliases.zsh` in `zsh`. |
+| CLI | `--help` succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`; an unknown `install_apps.sh` flag returns exit **3** (before preflight). |
+| Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` — preflight always runs first. |
+| `zsh_aliases.zsh` | `zsh -f -c "source …"` must not error. |
+
+This is **not** a substitute for `--dry-run` on a real Mac: there is no
+Homebrew, no installs, and no execution of `stay_fresh` steps. For
+RouterOS script integration tests in the same repository, see
+[`mikrotik/tests/README.md`](../mikrotik/tests/README.md).
 
 ---
 
