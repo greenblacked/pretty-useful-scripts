@@ -1,13 +1,14 @@
-# macos-initial-setup
+# macOS Initial Setup
 
 > Opinionated, idempotent shell scripts for provisioning and maintaining
 > a macOS workstation.
 
-This repository turns the normal "fresh Mac checklist" — install apps,
-wire up language toolchains, keep caches and Homebrew under control —
-into a set of small, composable scripts that are safe to run today, next
-month, and on the next machine. Every change is previewable with
-`--dry-run`, logged to `$TMPDIR`, and opt-out at a per-feature level.
+This folder is the macOS setup package inside the broader helper-scripts
+repository. It turns the normal "fresh Mac checklist" — install apps, wire
+up language toolchains, keep caches and Homebrew under control — into a set
+of small, composable scripts that are safe to run today, next month, and on
+the next machine. Every change is previewable with `--dry-run`, logged to
+`$TMPDIR`, and opt-out at a per-feature level.
 
 **Platform:** macOS 12+ (Monterey through the current release) on Apple
 Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
@@ -16,6 +17,7 @@ Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
 ## Table of contents
 
 - [TL;DR](#tldr)
+- [Folder map](#folder-map)
 - [Lifecycle: when to run what](#lifecycle-when-to-run-what)
 - [Design principles](#design-principles)
 - [Requirements](#requirements)
@@ -47,6 +49,16 @@ For returning users. Every command is idempotent.
 
 After linking `zsh_aliases.zsh`, the same three are available as
 `install-apps`, `install-devtools`, and `stay-fresh`.
+
+## Folder map
+
+| File | Use it for |
+| --- | --- |
+| `install_apps.sh` | Day-one workstation apps, Homebrew casks/formulae, platform CLIs, and Google Cloud SDK. |
+| `install_devtools.sh` | Language and infrastructure toolchains: Python, Terraform, Go, Helm, and version managers. |
+| `stay_fresh.sh` | Recurring maintenance: cleanup, updates, cache pruning, and version reporting. |
+| `v1_stay_fresh.sh` | Legacy minimal maintenance flow kept for reference and simple one-off runs. |
+| `zsh_aliases.zsh` | Optional interactive-shell aliases and helper functions. |
 
 ## Lifecycle: when to run what
 
@@ -101,10 +113,13 @@ manually from <https://brew.sh>.
 On a fresh machine:
 
 ```bash
-git clone https://github.com/greenblacked/macos-initial-setup.git \
-  ~/scripts/macos-initial-setup
-cd ~/scripts/macos-initial-setup
+git clone https://github.com/greenblacked/pretty-usuful-scripts.git \
+  ~/scripts/pretty-usuful-scripts
+cd ~/scripts/pretty-usuful-scripts/macos-initial-setup
 chmod +x ./*.sh
+
+./install_apps.sh --dry-run
+./install_devtools.sh --dry-run
 
 ./install_apps.sh                        # 1. cask apps + DevOps CLIs + Google Cloud SDK
 ./install_devtools.sh --setup-shell      # 2. language toolchains
