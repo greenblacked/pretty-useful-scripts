@@ -113,9 +113,8 @@ manually from <https://brew.sh>.
 On a fresh machine:
 
 ```bash
-git clone https://github.com/greenblacked/pretty-usuful-scripts.git \
-  ~/scripts/pretty-usuful-scripts
-cd ~/scripts/pretty-usuful-scripts/macos-initial-setup
+git clone https://github.com/greenblacked/pretty-usuful-scripts.git
+cd pretty-usuful-scripts/macos-initial-setup
 
 ./install_apps.sh     --dry-run --verbose
 ./install_devtools.sh --dry-run --verbose
