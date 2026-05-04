@@ -11,8 +11,8 @@
 #   - clean Xcode extras (Archives, DeviceSupport, stale simulators)
 #   - clean diagnostic / crash reports (user + system)
 #   - update & upgrade Homebrew (formulae + casks) and clean up
-#   - refresh dev toolchains (helm plugins, mise tools + plugins,
-#     gcloud components) installed by install_apps.sh / install_devtools.sh
+#   - refresh dev toolchains (helm plugins, gcloud components) installed by
+#     install_apps.sh / install_devtools.sh
 #
 # Usage:
 #   ./stay_fresh.sh [--dry-run] [--yes] [--verbose]
@@ -72,7 +72,6 @@ SKIP_TRASH=0
 SKIP_BREW=0
 SKIP_DEVCACHES=0
 SKIP_DEVTOOLS=0
-SKIP_MISE=0
 SKIP_HELM_PLUGINS=0
 SKIP_GCLOUD=0
 SKIP_VERSIONS=0
@@ -122,9 +121,7 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
                          (may prompt for sudo during cask postinstalls)
   --skip-devcaches       Don't clean npm/yarn/pnpm/pip/gem/go caches
   --skip-devtools        Shorthand: skip all dev-tool refresh steps below
-                         (--skip-mise --skip-helm-plugins --skip-gcloud
-                          --skip-versions)
-  --skip-mise            Don't run 'mise self-update / plugins update / upgrade'
+                         (--skip-helm-plugins --skip-gcloud --skip-versions)
   --skip-helm-plugins    Don't run 'helm plugin update' for installed plugins
   --skip-gcloud          Don't run 'gcloud components update'
   --skip-versions        Don't print active pyenv/goenv/tfenv/tenv/helm/gcloud
@@ -152,7 +149,6 @@ while (( $# > 0 )); do
     --brew-greedy)     BREW_GREEDY=1 ;;
     --skip-devcaches)  SKIP_DEVCACHES=1 ;;
     --skip-devtools)   SKIP_DEVTOOLS=1 ;;
-    --skip-mise)       SKIP_MISE=1 ;;
     --skip-helm-plugins) SKIP_HELM_PLUGINS=1 ;;
     --skip-gcloud)     SKIP_GCLOUD=1 ;;
     --skip-versions)   SKIP_VERSIONS=1 ;;
@@ -168,7 +164,6 @@ done
 # --skip-devtools is a convenience; fan it out across the individual
 # dev-tool refresh steps so the plan/summary accurately reflects what runs.
 if (( SKIP_DEVTOOLS )); then
-  SKIP_MISE=1
   SKIP_HELM_PLUGINS=1
   SKIP_GCLOUD=1
   SKIP_VERSIONS=1
@@ -417,7 +412,6 @@ plan_line "docker / orbstack prune"           "$(( 1 - SKIP_DOCKER      ))" "ima
 plan_line "xcode extras"                      "$(( 1 - SKIP_XCODE       ))" "Archives, DeviceSupport, simulators"
 plan_line "diagnostic / crash reports"        "$(( 1 - SKIP_DIAGNOSTICS ))" "user (+ system if sudo)"
 plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))"
-plan_line "mise refresh"                      "$(( 1 - SKIP_MISE        ))" "mise self-update + plugins update + upgrade"
 plan_line "helm plugin refresh"               "$(( 1 - SKIP_HELM_PLUGINS))" "helm plugin update <name>"
 plan_line "gcloud components update"          "$(( 1 - SKIP_GCLOUD      ))" "non-brew gcloud components"
 plan_line "report active versions"            "$(( 1 - SKIP_VERSIONS    ))" "pyenv/goenv/tfenv/tenv/helm/gcloud"
@@ -696,29 +690,12 @@ step_brew() {
   fi
 }
 
-# The version managers themselves (pyenv/tfenv/goenv/tenv/mise/helm,
+# The version managers themselves (pyenv/tfenv/goenv/tenv/helm,
 # gcloud-cli cask) are already upgraded by the brew step above. The steps
 # below refresh what sits on top of them; each is intentionally isolated so
 # it can be skipped independently (and so failures don't mask each other).
 # None of them auto-install new Python/Go/Terraform majors — that's an
 # explicit action best left to install_devtools.sh.
-
-# mise: self-update the binary (no-op when brew-managed), refresh the plugin
-# registry, then upgrade every mise-managed tool within its pinned spec.
-step_mise() {
-  if ! command -v mise >/dev/null 2>&1; then
-    info "mise not installed — nothing to refresh"
-    return 0
-  fi
-  # self-update is a no-op (and non-zero) when mise was installed via brew;
-  # treat that as informational, not a warning.
-  run_cmd "mise self-update" mise self-update \
-    || info "'mise self-update' not applicable (brew-managed mise is updated by brew step)"
-  run_cmd "mise plugins update" mise plugins update \
-    || warn "'mise plugins update' had issues"
-  run_cmd "mise upgrade"        mise upgrade \
-    || warn "'mise upgrade' had issues"
-}
 
 # Helm plugins are outside of brew's world, so they go stale quickly.
 # 'helm plugin update <name>' pulls the latest release for each one.
@@ -826,7 +803,6 @@ run_or_skip "Docker / OrbStack prune"              "$SKIP_DOCKER"      step_dock
 run_or_skip "Xcode extras"                         "$SKIP_XCODE"       step_xcode
 run_or_skip "Diagnostic / crash reports"           "$SKIP_DIAGNOSTICS" step_diagnostics
 run_or_skip "Homebrew update / upgrade / cleanup"  "$SKIP_BREW"         step_brew
-run_or_skip "mise refresh"                         "$SKIP_MISE"         step_mise
 run_or_skip "Helm plugin refresh"                  "$SKIP_HELM_PLUGINS" step_helm_plugins
 run_or_skip "gcloud components update"             "$SKIP_GCLOUD"       step_gcloud
 run_or_skip "Active tool versions"                 "$SKIP_VERSIONS"     step_versions
