@@ -183,9 +183,9 @@ human_duration() {
 human_bytes() {
   local b="$1" sign=""
   if (( b < 0 )); then sign="-"; b=$(( -b )); fi
-  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(echo "scale=2; $b/1073741824" | bc)"
-  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(echo "scale=2; $b/1048576"    | bc)"
-  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(echo "scale=2; $b/1024"       | bc)"
+  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1073741824}')"
+  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')"
+  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1024}')"
   else                            printf "%s%dB"    "$sign" "$b"
   fi
 }
@@ -588,15 +588,34 @@ step_docker() {
     return 1
   fi
 
+  # Safety: avoid pruning a remote Docker context.
+  local ctx host
+  ctx="$(docker context show 2>/dev/null || true)"
+  host="$(docker context inspect "${ctx:-default}" --format '{{ (index .Endpoints "docker").Host }}' 2>/dev/null || true)"
+  if [[ -n "$host" ]] && [[ "$host" != unix://* ]]; then
+    warn "docker context '${ctx:-?}' points to non-local host (${host}) — skipping prune"
+    return 0
+  fi
+
   # Size before
-  local before
+  local before after
   before="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null | awk -F'\t' '{print $1": "$2}' | paste -sd ', ' - || echo 'unknown')"
   printf "  docker disk usage: %s%s%s\n" "$C_DIM" "$before" "$C_RESET"
 
-  run_cmd "docker system prune -af --volumes" docker system prune -af --volumes \
-    || warn "'docker system prune' failed"
+  # Keep tagged images, remove only dangling (<none>) ones.
+  run_cmd "docker container prune -f" docker container prune -f \
+    || warn "'docker container prune' failed"
+  run_cmd "docker network prune -f" docker network prune -f \
+    || warn "'docker network prune' failed"
+  run_cmd "docker volume prune -f" docker volume prune -f \
+    || warn "'docker volume prune' failed"
+  run_cmd "docker image prune -f" docker image prune -f \
+    || warn "'docker image prune' failed"
   run_cmd "docker builder prune -af"          docker builder prune -af \
     || warn "'docker builder prune' failed"
+
+  after="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null | awk -F'\t' '{print $1": "$2}' | paste -sd ', ' - || echo 'unknown')"
+  printf "  docker disk usage after: %s%s%s\n" "$C_DIM" "$after" "$C_RESET"
 }
 
 step_xcode() {

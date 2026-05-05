@@ -336,8 +336,8 @@ path is protected by System Integrity Protection.
 5. Empty `~/.Trash`.
 6. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
    `go`, `cargo`).
-7. Prune Docker / OrbStack (images, containers, volumes, builder
-   cache).
+7. Prune Docker / OrbStack (containers, networks, volumes, builder
+   cache, and **dangling images only** — tagged images are kept).
 8. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
 9. Remove diagnostic and crash reports (user and system).
 10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
@@ -593,8 +593,14 @@ Homebrew / `pyenv` / `goenv` commands.
 - Empties `~/.Trash`.
 - Clears developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
   `go`, `cargo`).
-- Runs `docker system prune -af --volumes` equivalents and `brew
-  cleanup`/`autoremove` where applicable.
+- Prunes Docker resources when Docker is available:
+  - Containers (`docker container prune -f`)
+  - Networks (`docker network prune -f`)
+  - Volumes (`docker volume prune -f`)
+  - **Dangling images only** (`docker image prune -f`) — keeps tagged images
+  - Builder cache (`docker builder prune -af`)
+  - Skips pruning entirely when the active Docker context points to a non-local
+    daemon (non-`unix://…` host), to avoid cleaning a remote engine by mistake.
 - Upgrades Homebrew formulae and casks (greedy upgrade only with
   `--brew-greedy`).
 - Updates `mise`, Helm plugins, and `gcloud` components when those
