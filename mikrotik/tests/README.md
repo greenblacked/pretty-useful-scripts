@@ -8,6 +8,21 @@ exercise every `*.lua` in `../`. Two services run side by side:
 - `tester` — Python + `RouterOS-api` + `pytest`. Talks to `chr` on the Docker
   network and runs the test suite. **No host Python is required.**
 
+RouterOS script runbook (install, schedules): [`../README.md`](../README.md).
+To bump the tested RouterOS line, set `ROUTEROS_VERSION` / `EXPECT_ROUTEROS_VERSION`
+and align docs — see [Upgrading RouterOS](../README.md#upgrading-routeros).
+
+## Contents
+
+- [Requirements](#requirements)
+- [Run](#run)
+- [What is tested](#what-is-tested)
+- [Environment](#environment)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+- [See also](#see-also)
+- [Credits](#credits)
+
 ## Requirements
 
 - Docker (with the `compose` v2 plugin). Tested on Docker Desktop on macOS and
@@ -24,6 +39,13 @@ From anywhere in the repo:
 
 ```bash
 ./mikrotik/tests/run.sh
+```
+
+Skip `docker compose build` when images already exist (CHR disk download is
+unchanged — only image layers are skipped):
+
+```bash
+./mikrotik/tests/run.sh --no-build
 ```
 
 That builds both images, brings `chr` up, waits for the API healthcheck,
@@ -107,7 +129,7 @@ MikroTik. Use per [CHR licensing](https://help.mikrotik.com/docs/display/ROS/Clo
 ## See also
 
 - [`../README.md`](../README.md) — RouterOS runbook, policies, and scheduler hints.
-- [`../../macos-initial-setup/README.md`](../../macos-initial-setup/README.md#development--docker-checks) — **macOS** setup scripts: Docker-based `bash`/`shellcheck` checks (separate from this CHR test stack).
+- [`../../macos-initial-setup/README.md`](../../macos-initial-setup/README.md#development-docker-checks) — **macOS** setup scripts: Docker-based `bash`/`shellcheck` checks (separate from this CHR test stack).
 - [Repository root `README.md`](../../README.md#testing-docker) — overview of both Docker test paths.
 
 ## Credits

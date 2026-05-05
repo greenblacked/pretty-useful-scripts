@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # Run the MikroTik script integration tests against RouterOS CHR 7.22 in Docker.
 # Host requirement: Docker (with compose v2). No host Python or pip needed.
+#
+#   ./run.sh              # build + start CHR + pytest
+#   ./run.sh --no-build   # skip docker compose build (images must exist)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="$HERE/docker-compose.yml"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pretty-useful-mikrotik}"
 export COMPOSE_PROJECT_NAME
+
+NO_BUILD=0
+if [[ "${1:-}" == "--no-build" ]]; then
+  NO_BUILD=1
+  shift
+fi
 
 cd "$HERE"
 
@@ -54,8 +63,12 @@ trap_cleanup() {
 }
 trap trap_cleanup EXIT INT TERM
 
-echo "=== Building images (downloads CHR 7.22 on first build) ==="
-docker compose -f "$COMPOSE_FILE" build
+if [[ "$NO_BUILD" -eq 0 ]]; then
+  echo "=== Building images (downloads CHR 7.22 on first build) ==="
+  docker compose -f "$COMPOSE_FILE" build
+else
+  echo "=== Skipping image build (--no-build) ==="
+fi
 
 echo "=== Starting CHR (waiting for healthy state)… ==="
 # --wait blocks until all started services are healthy or it times out.

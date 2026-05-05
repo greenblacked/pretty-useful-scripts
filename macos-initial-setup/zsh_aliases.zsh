@@ -302,12 +302,21 @@ if [[ -x "$_ZSH_ALIASES_DIR/install_devtools.sh" ]]; then
   alias install-devtools="$_ZSH_ALIASES_DIR/install_devtools.sh"
 fi
 
+if [[ -x "$_ZSH_ALIASES_DIR/workstation_doctor.sh" ]]; then
+  alias workstation-doctor="$_ZSH_ALIASES_DIR/workstation_doctor.sh"
+fi
+
 if [[ -x "$_ZSH_ALIASES_DIR/bootstrap_mac.sh" ]]; then
   alias bootstrap-mac="$_ZSH_ALIASES_DIR/bootstrap_mac.sh"
 fi
 
 # ================================ macOS ====================================
+command -v brew >/dev/null 2>&1 && alias bout='brew outdated'
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
+  alias cdf='cd ~/Downloads'
+  alias cddev='cd ~/Developer 2>/dev/null || cd ~'
+
   # Show / hide hidden files in Finder
   alias showfiles='defaults write com.apple.finder AppleShowAllFiles YES && killall Finder'
   alias hidefiles='defaults write com.apple.finder AppleShowAllFiles NO && killall Finder'
@@ -327,6 +336,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 
 # ================================ functions ================================
+# Dedupe PATH while preserving order (first occurrence wins).
+dedupe_path() {
+  local -aU _dedupe_parts
+  _dedupe_parts=(${(s/:/)PATH})
+  export PATH="${(j/:/)_dedupe_parts}"
+}
+
 # mkcd <dir>: make a directory and cd into it.
 mkcd() {
   if [[ -z "${1:-}" ]]; then

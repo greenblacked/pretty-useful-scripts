@@ -15,12 +15,17 @@ SCRIPT_FILES = sorted(p for p in MIKROTIK_DIR.glob("*.lua") if p.is_file())
 # Scripts safe to load+run during tests (no reboot, no upstream calls).
 RUNNABLE_SCRIPTS = (
     "wan_failover_notify",
+    "wan_link_flap_notify",
     "health_check",
     "detect_internet",
     "dhcp_lease_watch",
     "firewall_drift",
     "firewall_drift_baseline",
     "mac_allowlist_dhcp",
+    "cert_expiry_watch",
+    "backup_file_cleanup",
+    "wireguard_watch",
+    "netwatch_notify",
     # rogue_dns_check is intentionally NOT here: it calls :resolve which depends
     # on upstream DNS reachability from the CHR. Its parse step still runs via
     # test_script_add_remove_roundtrip below.

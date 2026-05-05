@@ -4,7 +4,8 @@
 > a macOS workstation.
 
 This folder is the macOS setup package inside the broader helper-scripts
-repository. It turns the normal "fresh Mac checklist" — install apps, wire
+repository — see the [top-level `README.md`](../README.md) for a short
+overview of both macOS and MikroTik packages. It turns the normal "fresh Mac checklist" — install apps, wire
 up language toolchains, keep caches and Homebrew under control — into a set
 of small, composable scripts that are safe to run today, next month, and on
 the next machine. Every change is previewable with `--dry-run`, logged to
@@ -25,10 +26,12 @@ Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
 - [`install_apps.sh`](#install_appssh)
 - [`install_devtools.sh`](#install_devtoolssh)
 - [`stay_fresh.sh`](#stay_freshsh)
+- [`workstation_doctor.sh`](#workstation_doctorsh)
 - [`v1_stay_fresh.sh`](#v1_stay_freshsh)
 - [`zsh_aliases.zsh`](#zsh_aliaseszsh)
+- [Optional Brewfile](#optional-brewfile)
 - [What this changes on your machine](#what-this-changes-on-your-machine)
-- [Development: Docker checks](#development--docker-checks)
+- [Development: Docker checks](#development-docker-checks)
 
 ## TL;DR
 
@@ -48,8 +51,8 @@ For returning users. Every command is idempotent.
 ./install_devtools.sh --dry-run --verbose
 ```
 
-After linking `zsh_aliases.zsh`, the same three are available as
-`install-apps`, `install-devtools`, and `stay-fresh`.
+After linking `zsh_aliases.zsh`, the same scripts are available as
+`install-apps`, `install-devtools`, `stay-fresh`, and `workstation-doctor`.
 
 ## Folder map
 
@@ -58,9 +61,11 @@ After linking `zsh_aliases.zsh`, the same three are available as
 | `install_apps.sh` | Day-one workstation apps, Homebrew casks/formulae, platform CLIs, and Google Cloud SDK. |
 | `install_devtools.sh` | Language and infrastructure toolchains: Python, Terraform, Go, Helm, and version managers. |
 | `stay_fresh.sh` | Recurring maintenance: cleanup, updates, cache pruning, and version reporting. |
+| `workstation_doctor.sh` | Read-only report: security, disk, CLT, Homebrew, SSH/git, Time Machine, logs, LaunchAgents. |
 | `v1_stay_fresh.sh` | Legacy minimal maintenance flow kept for reference and simple one-off runs. |
 | `zsh_aliases.zsh` | Optional interactive-shell aliases and helper functions. |
-| `tests/` | Docker-based **static** checks (ShellCheck, `bash -n`, CLI smoke tests). See [Development: Docker checks](#development--docker-checks). |
+| `Brewfile.example` | Optional `brew bundle` starting point — copy to `Brewfile` and customize. |
+| `tests/` | Docker-based **static** checks (ShellCheck, `bash -n`, CLI smoke tests). See [Development: Docker checks](#development-docker-checks). |
 
 ## Lifecycle: when to run what
 
@@ -74,6 +79,7 @@ than memorizing flags.
 | **Bootstrap** | `install_devtools.sh` | Once per machine (+ version bumps) | `~/.pyenv`, `~/.goenv`, `$(brew --prefix)/bin`, optionally `~/.zshrc` |
 | **Ambient** | `zsh_aliases.zsh` | Sourced on every interactive shell (after wiring into `~/.zshrc`) | Your shell only — no disk writes |
 | **Recurring** | `stay_fresh.sh` | Weekly / on demand | Caches, Homebrew, Docker, Xcode, toolchains |
+| **Audit** | `workstation_doctor.sh` | After bootstrap or when troubleshooting | Read-only checks; writes a log under `$TMPDIR` |
 | **Legacy** | `v1_stay_fresh.sh` | On demand | Minimal subset of the above; no flags |
 
 The two bootstrap scripts are independent — you can run either one
@@ -93,7 +99,7 @@ code looks the way it does.
 | **Dry-run first** | `--dry-run` is supported on every script that mutates state (except the explicitly minimal `v1_stay_fresh.sh`). No `sudo` prompt is triggered in dry-run. |
 | **Logged** | Every non-trivial script writes a timestamped log to `$TMPDIR`. `--verbose` also streams to the terminal. |
 | **No hidden writes** | Shell rc files are modified only when you pass `--setup-shell`. Every such block is bracketed by markers so it can be found and removed. |
-| **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
+| **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step; Apple softwareupdate and unified log trim are **opt-in**. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
 | **Sudo only when needed** | Scripts request `sudo` once at startup, keep it warm for the run, and release it on exit. Running as `root` is refused. |
 
 ## Requirements
@@ -340,13 +346,19 @@ path is protected by System Integrity Protection.
    cache, and **dangling images only** — tagged images are kept).
 8. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
 9. Remove diagnostic and crash reports (user and system).
-10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
+10. Optional **unified log trim** — off by default; `--trim-unified-old-logs`
+    removes aged `*.log` / `*.asl` under `~/Library/Logs` (skips
+    `DiagnosticReports`; use `--log-trim-days`).
+11. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
     `autoremove`.
-11. Run `mise self-update`, update plugins, and upgrade tools.
 12. Update installed Helm plugins.
 13. Run `gcloud components update`.
 14. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
     and `gcloud`.
+15. Optional **Apple software updates** — off by default; pass
+    `--macos-softwareupdate` to run `softwareupdate --list`, or
+    `--macos-softwareupdate-install` to install recommended updates (needs
+    `sudo`; may require a reboot).
 
 ### Usage
 
@@ -357,6 +369,9 @@ path is protected by System Integrity Protection.
 ./stay_fresh.sh --brew-greedy     # also upgrade :latest / auto_updates casks
 ./stay_fresh.sh --no-sudo         # skip every step that requires sudo
 ./stay_fresh.sh --skip-devtools   # skip all dev-tool refresh steps at once
+./stay_fresh.sh --macos-softwareupdate   # list Apple updates (no install)
+./stay_fresh.sh --macos-softwareupdate-install --yes  # install recommended (sudo)
+./stay_fresh.sh --trim-unified-old-logs --log-trim-days 30
 ```
 
 ### Options
@@ -366,7 +381,7 @@ path is protected by System Integrity Protection.
 | `--dry-run` | Show the plan; change nothing. |
 | `-y`, `--yes` | Skip confirmation prompts. |
 | `-v`, `--verbose` | Stream per-step output live. |
-| `--no-sudo` | Skip `purge`, DNS flush, system caches, and system diagnostics. |
+| `--no-sudo` | Skip `purge`, DNS flush, system caches, system diagnostics, and `softwareupdate --install`. |
 | `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
 | `--skip-devtools` | Shorthand for `--skip-mise --skip-helm-plugins --skip-gcloud --skip-versions`. |
 | `--skip-memory` | Skip the `sudo purge` step. |
@@ -379,10 +394,16 @@ path is protected by System Integrity Protection.
 | `--skip-docker` | Skip Docker / OrbStack prune. |
 | `--skip-xcode` | Skip Xcode extras cleanup. |
 | `--skip-diagnostics` | Skip diagnostic and crash-report cleanup. |
+| `--trim-unified-old-logs` | Remove `*.log` / `*.asl` under `~/Library/Logs` older than `--log-trim-days` (excludes `DiagnosticReports`). |
+| `--skip-unified-log-trim` | Skip unified log trim (default). |
+| `--log-trim-days N` | Age threshold for unified log trim (default: 21). |
 | `--skip-mise` | Skip `mise` update. |
 | `--skip-helm-plugins` | Skip Helm plugin updates. |
 | `--skip-gcloud` | Skip `gcloud components update`. |
 | `--skip-versions` | Skip the final version report. |
+| `--macos-softwareupdate` | Run `softwareupdate --list` (step is **skipped** by default). |
+| `--macos-softwareupdate-install` | After listing, install recommended updates (`sudo`; may reboot). |
+| `--skip-macos-softwareupdate` | Skip the softwareupdate step (default). |
 | `-h`, `--help` | Show the built-in help. |
 
 ### Output
@@ -403,6 +424,44 @@ accounting, and closes with a summary that includes:
 | `0` | Completed (possibly with warnings). |
 | `1` | One or more steps hard-failed. |
 | `2` | Preflight checks failed. |
+| `3` | Invalid arguments. |
+
+---
+
+## `workstation_doctor.sh`
+
+Read-only health report after bootstrap (or when debugging a machine). Checks
+FileVault, Gatekeeper, SIP, Rosetta (Apple Silicon), free disk space, Xcode CLT,
+`brew doctor` (optional), SSH public keys, `git` global identity, Time Machine
+status, log directory sizes, `~/Library/LaunchAgents`, and GUI login items
+(best-effort via AppleScript).
+
+### Usage
+
+```bash
+./workstation_doctor.sh
+./workstation_doctor.sh --verbose
+./workstation_doctor.sh --skip-brew-doctor --skip-login-items
+```
+
+### Options
+
+| Flag | Purpose |
+| --- | --- |
+| `-v`, `--verbose` | Stream captured commands to the log and terminal. |
+| `--skip-brew-doctor` | Omit `brew doctor` (faster). |
+| `--skip-login-items` | Omit AppleScript login-item query (avoids Automation prompts). |
+| `--skip-time-machine` | Omit `tmutil` section. |
+| `--skip-log-sizes` | Omit `du` of log folders. |
+| `--skip-launchd` | Omit LaunchAgents listing. |
+| `-h`, `--help` | Built-in help. |
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed. |
+| `2` | Not macOS or running as root. |
 | `3` | Invalid arguments. |
 
 ---
@@ -486,12 +545,21 @@ Re-running the block is safe: `ln -sfn` overwrites the symlink in place,
 and the `grep` guard ensures the `source` line is appended to `~/.zshrc`
 only once.
 
+### Optional Brewfile
+
+Copy [`Brewfile.example`](Brewfile.example) to `Brewfile`, edit, then run
+`brew bundle install`. To capture what is already installed:
+`brew bundle dump --file=Brewfile --force`. This repo still recommends
+`install_apps.sh` for the curated default set; the Brewfile path is for forks.
+
 ### What you get
 
 | Category | Highlights |
 | --- | --- |
 | Safety | `cp`, `mv`, `rm` default to `-i` (use `\rm` to bypass). |
-| Navigation | `..`, `...`, `....`, `.....`, `-`, `~`, `mkcd`, `up N`. |
+| Navigation | `..`, `...`, `....`, `.....`, `-`, `~`, `mkcd`, `up N`, `cdf` / `cddev` (macOS). |
+| Homebrew | `bout` → `brew outdated` when `brew` exists. |
+| PATH | `dedupe_path` — drop duplicate PATH entries (order preserved). |
 | Listing | `ls`, `l`, `ll`, `la`, `lt` prefer `eza` when available. |
 | Modern replacements | `cat`→`bat`, `find`→`fd`, `grep`→`rg`, `top`→`htop`, `df`→`duf`, `du`→`dust`. |
 | Git | `gs`, `gaa`, `gcm`, `gco`, `gcb`, `gp`, `gpl`, `gl`, plus `gwip` (stage + checkpoint) and `gprune` (delete merged branches). |
@@ -525,10 +593,24 @@ From the **repository root**:
 ./macos-initial-setup/tests/run.sh
 ```
 
+Faster iteration when the image is already built:
+
+```bash
+./macos-initial-setup/tests/run.sh --no-build
+```
+
+Noisier output (bash / shellcheck / zsh versions at the start):
+
+```bash
+VERBOSE=1 ./macos-initial-setup/tests/run.sh
+```
+
 Same thing without the wrapper:
 
 ```bash
-docker compose -f macos-initial-setup/tests/docker-compose.yml run --rm tester
+docker compose -f macos-initial-setup/tests/docker-compose.yml run --rm \
+  -e VERBOSE=0 \
+  tester
 ```
 
 The `tester` image (`tests/tester/Dockerfile`) installs `bash`, `shellcheck`,
@@ -537,10 +619,10 @@ and `zsh`, mounts the repo read-only at `/repo`, and runs
 
 | Check | Notes |
 | --- | --- |
-| `bash -n` | All `*.sh` in this directory. |
+| `bash -n` | Every `*.sh` directly under `macos-initial-setup/` (not `tests/`), plus `mikrotik/pull_router_backups.sh`. New top-level scripts are picked up automatically. |
 | ShellCheck | `--severity=error` for the bash scripts. Debian’s stock ShellCheck may not ship a `zsh` dialect — the harness then **skips** `zsh` ShellCheck but still **sources** `zsh_aliases.zsh` in `zsh`. |
-| CLI | `--help` succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`; an unknown `install_apps.sh` flag returns exit **3** (before preflight). |
-| Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` — preflight always runs first. |
+| CLI | `--help` / `-h` for the install scripts, `stay_fresh.sh`, `workstation_doctor.sh`, `v1_stay_fresh.sh`, and `pull_router_backups.sh`. Unknown flags: `install_{apps,devtools}.sh`, `stay_fresh.sh`, and `workstation_doctor.sh` return **3** before preflight; `v1_stay_fresh.sh` returns **2** (legacy parser). |
+| Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` are run with `--dry-run`; `workstation_doctor.sh` is run with **no args** (it has no `--dry-run`). All exit **2** with a “macOS only” message once preflight runs. |
 | `zsh_aliases.zsh` | `zsh -f -c "source …"` must not error. |
 
 This is **not** a substitute for `--dry-run` on a real Mac: there is no
@@ -603,10 +685,17 @@ Homebrew / `pyenv` / `goenv` commands.
     daemon (non-`unix://…` host), to avoid cleaning a remote engine by mistake.
 - Upgrades Homebrew formulae and casks (greedy upgrade only with
   `--brew-greedy`).
-- Updates `mise`, Helm plugins, and `gcloud` components when those
-  tools are installed.
+- Updates Helm plugins and `gcloud` components when those tools are installed.
+- Optionally lists or installs **Apple** software updates (`softwareupdate`) when
+  you pass `--macos-softwareupdate` / `--macos-softwareupdate-install`.
+- Optionally trims old `*.log` / `*.asl` under `~/Library/Logs` with
+  `--trim-unified-old-logs` (skips `DiagnosticReports`).
 - Writes `/tmp/stay_fresh-YYYYMMDD-HHMMSS.log`.
 - Does **not** modify any shell configuration files.
+
+### `workstation_doctor.sh`
+
+- Read-only checks; writes `workstation_doctor-*.log` under `$TMPDIR`.
 
 ### `v1_stay_fresh.sh`
 
@@ -636,5 +725,5 @@ release the credential on exit.
 | --- | --- |
 | `install_apps.sh` | Cask installs that require admin approval (Homebrew invokes `sudo` internally; the script itself does not escalate). |
 | `install_devtools.sh` | Same as above, only via Homebrew where required. |
-| `stay_fresh.sh` | `purge`, DNS flush, `/Library/Caches` cleanup, system diagnostic cleanup. Pass `--no-sudo` to skip all of these. |
+| `stay_fresh.sh` | `purge`, DNS flush, `/Library/Caches` cleanup, system diagnostic cleanup, optional `softwareupdate --install`. Pass `--no-sudo` to skip privileged steps. |
 | `v1_stay_fresh.sh` | `purge`. No way to opt out — use `stay_fresh.sh --no-sudo` instead. |

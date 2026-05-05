@@ -10,6 +10,7 @@
 #   - prune Docker / OrbStack (images, containers, volumes, builder cache)
 #   - clean Xcode extras (Archives, DeviceSupport, stale simulators)
 #   - clean diagnostic / crash reports (user + system)
+#   - optional: trim old *.log / *.asl under ~/Library/Logs (excl. DiagnosticReports)
 #   - update & upgrade Homebrew (formulae + casks) and clean up
 #   - refresh dev toolchains (helm plugins, gcloud components) installed by
 #     install_apps.sh / install_devtools.sh
@@ -20,6 +21,10 @@
 #                   [--skip-usercaches] [--skip-trash] [--skip-brew]
 #                   [--skip-devcaches] [--skip-docker]
 #                   [--skip-xcode] [--skip-diagnostics]
+#                   [--macos-softwareupdate] [--macos-softwareupdate-install]
+#                   [--skip-macos-softwareupdate]
+#                   [--trim-unified-old-logs] [--skip-unified-log-trim]
+#                   [--log-trim-days N]
 #                   [--no-sudo] [--help]
 #
 # Exit codes:
@@ -78,6 +83,10 @@ SKIP_VERSIONS=0
 SKIP_DOCKER=0
 SKIP_XCODE=0
 SKIP_DIAGNOSTICS=0
+SKIP_MACOS_SOFTWAREUPDATE=1
+MACOS_SWUPDATE_INSTALL=0
+SKIP_UNIFIED_LOG_TRIM=1
+LOG_TRIM_DAYS=21
 BREW_GREEDY=0
 
 LOG_DIR="${TMPDIR:-/tmp}"
@@ -129,6 +138,18 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
   --skip-docker          Don't prune Docker / OrbStack
   --skip-xcode           Don't clean Xcode Archives/DeviceSupport/simulators
   --skip-diagnostics     Don't remove crash / diagnostic reports
+  --macos-softwareupdate Run 'softwareupdate --list' (off by default)
+  --macos-softwareupdate-install
+                         After listing, install recommended updates (needs sudo;
+                         may reboot — implies --macos-softwareupdate)
+  --skip-macos-softwareupdate
+                         Skip Apple softwareupdate step (default)
+  --trim-unified-old-logs
+                         Remove *.log / *.asl under ~/Library/Logs older than
+                         --log-trim-days (excludes DiagnosticReports subtree)
+  --skip-unified-log-trim
+                         Skip unified log trim (default)
+  --log-trim-days N      Days for unified log trim (default: $LOG_TRIM_DAYS)
 
 Log file: $LOG_FILE
 EOF
@@ -155,6 +176,26 @@ while (( $# > 0 )); do
     --skip-docker)     SKIP_DOCKER=1 ;;
     --skip-xcode)      SKIP_XCODE=1 ;;
     --skip-diagnostics)SKIP_DIAGNOSTICS=1 ;;
+    --macos-softwareupdate-install)
+                       SKIP_MACOS_SOFTWAREUPDATE=0
+                       MACOS_SWUPDATE_INSTALL=1 ;;
+    --macos-softwareupdate)
+                       SKIP_MACOS_SOFTWAREUPDATE=0 ;;
+    --skip-macos-softwareupdate)
+                       SKIP_MACOS_SOFTWAREUPDATE=1
+                       MACOS_SWUPDATE_INSTALL=0 ;;
+    --trim-unified-old-logs)
+                       SKIP_UNIFIED_LOG_TRIM=0 ;;
+    --skip-unified-log-trim)
+                       SKIP_UNIFIED_LOG_TRIM=1 ;;
+    --log-trim-days)
+                       shift
+                       if [[ -z "${1:-}" ]]; then err "--log-trim-days requires a number"; usage; exit 3; fi
+                       LOG_TRIM_DAYS="$1"
+                       shift
+                       continue
+                       ;;
+    --log-trim-days=*) LOG_TRIM_DAYS="${1#*=}" ;;
     -h|--help)         usage; exit 0 ;;
     *)                 err "unknown option: $1"; echo; usage; exit 3 ;;
   esac
@@ -167,6 +208,11 @@ if (( SKIP_DEVTOOLS )); then
   SKIP_HELM_PLUGINS=1
   SKIP_GCLOUD=1
   SKIP_VERSIONS=1
+fi
+
+if ! [[ "${LOG_TRIM_DAYS}" =~ ^[0-9]+$ ]] || (( LOG_TRIM_DAYS < 1 )); then
+  warn "invalid --log-trim-days, using 21"
+  LOG_TRIM_DAYS=21
 fi
 
 # ---------------------------------------------------------------------------
@@ -375,13 +421,15 @@ NEEDS_SUDO=0
 (( SKIP_DNS         == 0 )) && NEEDS_SUDO=1
 (( SKIP_SYSCACHES   == 0 )) && NEEDS_SUDO=1
 (( SKIP_DIAGNOSTICS == 0 )) && NEEDS_SUDO=1
+(( SKIP_MACOS_SOFTWAREUPDATE == 0 )) && (( MACOS_SWUPDATE_INSTALL == 1 )) && (( DRY_RUN == 0 )) && NEEDS_SUDO=1
 
 if (( USE_SUDO == 0 )); then
-  warn "--no-sudo set: memory purge, DNS flush, system caches, and system diagnostics will be skipped"
+  warn "--no-sudo set: memory purge, DNS flush, system caches, system diagnostics, and macOS softwareupdate install will be skipped"
   SKIP_MEMORY=1
   SKIP_DNS=1
   SKIP_SYSCACHES=1
   SKIP_DIAGNOSTICS_SYS=1
+  MACOS_SWUPDATE_INSTALL=0
   NEEDS_SUDO=0
 fi
 
@@ -402,6 +450,7 @@ if (( NEEDS_SUDO == 1 )) && (( DRY_RUN == 0 )); then
     SKIP_DNS=1
     SKIP_SYSCACHES=1
     SKIP_DIAGNOSTICS_SYS=1
+    MACOS_SWUPDATE_INSTALL=0
   fi
 elif (( DRY_RUN )); then
   info "(dry-run) would request sudo for memory/DNS/system-caches/diagnostics steps"
@@ -432,11 +481,14 @@ plan_line "empty trash"                       "$(( 1 - SKIP_TRASH       ))" "~/.
 plan_line "docker / orbstack prune"           "$(( 1 - SKIP_DOCKER      ))" "images, containers, volumes, builder"
 plan_line "xcode extras"                      "$(( 1 - SKIP_XCODE       ))" "Archives, DeviceSupport, simulators"
 plan_line "diagnostic / crash reports"        "$(( 1 - SKIP_DIAGNOSTICS ))" "user (+ system if sudo)"
+plan_line "trim old unified logs"             "$(( 1 - SKIP_UNIFIED_LOG_TRIM ))" "~/Library/Logs *.log/*.asl +${LOG_TRIM_DAYS}d"
 plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))"
 plan_line "dev-tool caches"                   "$(( 1 - SKIP_DEVCACHES   ))" "npm/yarn/pnpm/pip/gem/go"
 plan_line "helm plugin refresh"               "$(( 1 - SKIP_HELM_PLUGINS))" "helm plugin update <name>"
 plan_line "gcloud components update"          "$(( 1 - SKIP_GCLOUD      ))" "non-brew gcloud components"
 plan_line "report active versions"            "$(( 1 - SKIP_VERSIONS    ))" "pyenv/goenv/tfenv/tenv/helm/gcloud"
+plan_line "Apple softwareupdate"              "$(( 1 - SKIP_MACOS_SOFTWAREUPDATE ))" \
+  "$([[ $MACOS_SWUPDATE_INSTALL == 1 ]] && echo 'install recommended' || echo 'list only')"
 hr
 
 if (( DRY_RUN )); then
@@ -732,6 +784,40 @@ step_diagnostics() {
   fi
 }
 
+# Conservative trim: age-based removal of *.log / *.asl under ~/Library/Logs,
+# excluding DiagnosticReports (handled by the diagnostics step).
+step_unified_log_trim() {
+  local base="$HOME/Library/Logs"
+  local dr="$base/DiagnosticReports"
+  if [[ ! -d "$base" ]]; then
+    info "no ~/Library/Logs — skipping"
+    return 0
+  fi
+  printf "  scanning %s (mtime +%s days), excluding DiagnosticReports\n" "$base" "$LOG_TRIM_DAYS"
+  if (( DRY_RUN )); then
+    local cnt=0
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      printf "  %s(dry-run)%s would remove %s\n" "$C_DIM" "$C_RESET" "$f"
+      cnt=$((cnt + 1))
+      (( cnt >= 40 )) && { info "(dry-run) listing limited to 40 paths"; break; }
+    done < <(find "$base" \( -path "$dr" -o -path "$dr/*" \) -prune -o \
+      -type f \( -name "*.log" -o -name "*.asl" \) -mtime "+${LOG_TRIM_DAYS}" -print 2>/dev/null)
+    return 0
+  fi
+  local n=0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if rm -f "$f" 2>>"$LOG_FILE"; then
+      n=$((n + 1))
+    else
+      STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    fi
+  done < <(find "$base" \( -path "$dr" -o -path "$dr/*" \) -prune -o \
+    -type f \( -name "*.log" -o -name "*.asl" \) -mtime "+${LOG_TRIM_DAYS}" -print 2>/dev/null)
+  ok "removed $n log/asl file(s) older than ${LOG_TRIM_DAYS} days"
+}
+
 step_brew() {
   if ! command -v brew >/dev/null 2>&1; then
     warn "brew not on PATH"
@@ -884,6 +970,36 @@ step_versions() {
   fi
 }
 
+# Optional Apple software updates — off by default; listing needs no sudo,
+# installing recommended updates uses sudo and may require a reboot.
+step_softwareupdate() {
+  if ! command -v softwareupdate &>/dev/null; then
+    warn "softwareupdate not found"
+    return 1
+  fi
+  run_cmd "softwareupdate --list" softwareupdate --list
+  if (( MACOS_SWUPDATE_INSTALL == 0 )); then
+    info "listing only; pass --macos-softwareupdate-install to apply recommended updates"
+    return 0
+  fi
+  warn "Installing recommended Apple updates may require a reboot."
+  if (( DRY_RUN )); then
+    info "(dry-run) would run: sudo softwareupdate --install --recommended"
+    return 0
+  fi
+  if (( ASSUME_YES == 0 )) && [[ -t 0 ]]; then
+    printf "%sInstall recommended updates now? [y/N]%s " "$C_BOLD" "$C_RESET"
+    read -r sw_ans
+    case "$sw_ans" in
+      y|Y|yes|YES) ;;
+      *) info "softwareupdate install skipped by user"; return 0 ;;
+    esac
+  fi
+  if ! run_cmd_tty "softwareupdate --install --recommended" sudo softwareupdate --install --recommended; then
+    warn "'softwareupdate --install --recommended' had issues — see log"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # execute
 # ---------------------------------------------------------------------------
@@ -908,11 +1024,13 @@ run_or_skip "Empty trash"                          "$SKIP_TRASH"       step_tras
 run_or_skip "Docker / OrbStack prune"              "$SKIP_DOCKER"      step_docker
 run_or_skip "Xcode extras"                         "$SKIP_XCODE"       step_xcode
 run_or_skip "Diagnostic / crash reports"           "$SKIP_DIAGNOSTICS" step_diagnostics
+run_or_skip "Trim old unified logs"               "$SKIP_UNIFIED_LOG_TRIM" step_unified_log_trim
 run_or_skip "Homebrew update / upgrade / cleanup"  "$SKIP_BREW"         step_brew
 run_or_skip "Dev-tool caches"                      "$SKIP_DEVCACHES"   step_devcaches
 run_or_skip "Helm plugin refresh"                  "$SKIP_HELM_PLUGINS" step_helm_plugins
 run_or_skip "gcloud components update"             "$SKIP_GCLOUD"       step_gcloud
 run_or_skip "Active tool versions"                 "$SKIP_VERSIONS"     step_versions
+run_or_skip "Apple softwareupdate"                 "$SKIP_MACOS_SOFTWAREUPDATE" step_softwareupdate
 
 ELAPSED=$(( $(date +%s) - START_ALL ))
 FREE_AFTER_B="$(disk_free_bytes)"

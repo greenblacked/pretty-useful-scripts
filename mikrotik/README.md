@@ -3,11 +3,21 @@
 A small collection of RouterOS 7.x scripts (verified against **RouterOS 7.22**)
 for backups, WiFi rotation, monitoring and Telegram notifications. All scripts
 live in `/system script` on the router and are run either manually or from
-`/system scheduler`.
+`/system scheduler`. Repository overview: [`README.md`](../README.md).
 
 > The `.lua` extension is just for editor syntax highlighting — these are
 > RouterOS scripts, not Lua. Paste the file contents into the *Source* field
 > of a `/system script` entry on the router.
+
+## Table of contents
+
+- [Files at a glance](#files-at-a-glance)
+- [Installation](#installation)
+- [Script details](#script-details)
+- [Security action surface](#security-action-surface)
+- [Docker integration tests (CHR 7.22)](#docker-integration-tests-chr-722)
+- [RouterOS 7.22 notes & gotchas](#routeros-722-notes-gotchas)
+- [Upgrading RouterOS](#upgrading-routeros)
 
 ## Files at a glance
 
@@ -19,6 +29,12 @@ live in `/system script` on the router and are run either manually or from
 | `health_check.lua`              | CPU / RAM / disk / temperature watchdog with threshold alerts.          |
 | `update_check.lua`              | Notifies once when a newer RouterOS version appears on your channel.    |
 | `wan_failover_notify.lua`       | One-shot Telegram alert on built-in WAN-detect state transitions.       |
+| `wan_link_flap_notify.lua`      | Telegram when the WAN interface link (`running`) goes up or down.        |
+| `cert_expiry_watch.lua`         | Telegram if a cert is expired or expires within the configured day window. |
+| `backup_file_cleanup.lua`       | Deletes `backup-*` files on `/file` older than `RetentionDays`.        |
+| `wireguard_watch.lua`           | Telegram on WireGuard down or stale peer handshakes.                   |
+| `netwatch_notify.lua`           | Telegram when `/tool netwatch` host status snapshot changes.           |
+| `pull_router_backups.sh`        | **Host:** `scp` backup-*.backup / .rsc from the router (bash).         |
 | `detect_internet.lua`           | Re-runs RouterOS WAN/LAN auto-detection (manual reset).                 |
 | `reboot-and-flush.lua`          | Flushes DNS + connection tracking, then reboots. No pre-reboot ping.    |
 | `dhcp_lease_watch.lua`          | Alerts on new MACs, duplicate hostnames, and lease churn.               |
@@ -65,6 +81,11 @@ Add via **System → Scheduler** (use the same policy set as the scripts):
 | `health_check`        | `5m`                       |
 | `update_check`        | `1d`                       |
 | `wan_failover_notify` | `1m`                       |
+| `wan_link_flap_notify`| `1m`                       |
+| `cert_expiry_watch`   | `1d`                       |
+| `backup_file_cleanup` | `7d` (after `backup`)      |
+| `wireguard_watch`     | `5m`                       |
+| `netwatch_notify`     | `5m`                       |
 | `dhcp_lease_watch`    | `5m`                       |
 | `firewall_drift`      | `15m`                      |
 | `mac_allowlist_dhcp`  | `5m`                       |
@@ -73,6 +94,23 @@ Add via **System → Scheduler** (use the same policy set as the scripts):
 
 `detect_internet`, `reboot-and-flush`, and `firewall_drift_baseline` are
 intentionally manual / on-demand — don't schedule them.
+
+Set `WanInterface` in both `wan_failover_notify` and `wan_link_flap_notify` to
+your real WAN (e.g. `pppoe-out1` vs `ether1`).
+
+### Off-router backups
+
+[`pull_router_backups.sh`](pull_router_backups.sh) runs on your Mac or Linux
+box (not on the router). Use `-h` / `--help` for usage. Enable **SSH + SFTP**
+on the router, then:
+
+```bash
+chmod +x pull_router_backups.sh
+./pull_router_backups.sh admin@192.168.88.1 ~/Archive/mikrotik-backups
+```
+
+It uses `scp` wildcards (`backup-*.backup`, `backup-*.rsc`). If nothing
+matches, the script exits **0** and prints a notice.
 
 ### Reboot notifications
 
@@ -153,6 +191,38 @@ Requires detect-internet to be enabled on the interface — run
 
 Edit `WanInterface` at the top of the script if your WAN port isn't
 `ether1`.
+
+### `wan_link_flap_notify.lua`
+Watches the WAN interface's L1 `running` flag (carrier / link up vs down) and
+Telegrams on **transitions** only. Complements `wan_failover_notify.lua`
+(`detect-internet-state` can stay `internet` while the physical link flaps).
+Uses `:global WAN_LINK_LAST` (`up` / `down`); first scheduled run sets baseline
+without messaging. Edit `WanInterface` (e.g. `pppoe-out1`).
+
+### `cert_expiry_watch.lua`
+Scans non-disabled `/certificate` entries. Telegram lists any **expired** cert
+and any cert whose `invalid-after` falls within the script's `+ 30d` window
+(edit the interval in source to tune). Schedule at **`1d`** or longer to avoid
+duplicate alerts.
+
+### `backup_file_cleanup.lua`
+Removes `/file` entries whose name matches `backup-*` and whose
+`creation-time` is older than `RetentionDays` (default 30). Pairs with
+`backup.lua`; logs to `/log` only (no Telegram). Schedule weekly or right
+after backups.
+
+### `wireguard_watch.lua`
+Requires a WireGuard interface named in `Iface` (default `wireguard1`). Sets
+health state `:global WGHEALTHLAST` to `ok`, `down`, or `stale`. Alerts on
+transitions (and on first run if already unhealthy). **Down:** interface not
+running. **Stale:** any enabled peer's `last-handshake` is older than `300s`
+(edit in source). Handshake math is in `on-error` — verify on your RouterOS
+build.
+
+### `netwatch_notify.lua`
+Builds a string snapshot of all `/tool netwatch` rows (`host:status|…`) and
+Telegrams when it changes. First run stores `:global NETWATCHSNAP` only. Add
+hosts under **Tools → Netwatch** in Winbox.
 
 ### `dhcp_lease_watch.lua`
 Periodically scans `/ip dhcp-server lease` and alerts on three conditions:
@@ -254,7 +324,7 @@ CH instance over the API.
 
 The macOS setup scripts in this repo have a **separate** lightweight Docker
 harness (syntax + ShellCheck only, no Homebrew) — see
-[`macos-initial-setup/README.md`](../macos-initial-setup/README.md#development--docker-checks).
+[`macos-initial-setup/README.md`](../macos-initial-setup/README.md#development-docker-checks).
 
 ## RouterOS 7.22 notes & gotchas
 
@@ -282,3 +352,18 @@ harness (syntax + ShellCheck only, no Homebrew) — see
   uses `/interface wifi security` with the property `passphrase`, not the
   legacy `/interface wireless security-profiles wpa2-pre-shared-key`. Toggle
   `UseWifiWave2` accordingly.
+
+## Upgrading RouterOS
+
+These scripts are exercised on **7.22** (see [`tests/README.md`](tests/README.md)).
+When you move to a newer **7.x** patch or minor:
+
+1. Read MikroTik’s release notes for scripting, `wifi` vs `wireless`, and
+   certificate / fetch behavior.
+2. Re-run `./mikrotik/tests/run.sh` after bumping the CHR image / version the
+   harness uses (or spot-check by pasting changed scripts into a lab router).
+3. Smoke-test `tg_send` and one scheduled script on the production router
+   before relying on alerts.
+
+Update the “verified against **7.22**” lines in this README and the root
+[`README.md`](../README.md) when you intentionally re-baseline on a new version.

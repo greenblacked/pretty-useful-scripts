@@ -16,6 +16,7 @@ services:
     container_name: pretty-useful-macos-setup-tester
     environment:
       REPO_ROOT: /repo
+      VERBOSE: "${VERBOSE:-0}"
     volumes:
       - ../../:/repo:ro
     working_dir: /repo
