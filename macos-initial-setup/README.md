@@ -8,7 +8,7 @@ repository. It turns the normal "fresh Mac checklist" — install apps, wire
 up language toolchains, keep caches and Homebrew under control — into a set
 of small, composable scripts that are safe to run today, next month, and on
 the next machine. Every change is previewable with `--dry-run`, logged to
-`$TMPDIR`, and opt-out at a per-feature level.
+an optional log file (see `--log-file`), and opt-out at a per-feature level.
 
 **Platform:** macOS 12+ (Monterey through the current release) on Apple
 Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
@@ -91,7 +91,7 @@ code looks the way it does.
 | **Idempotent** | Re-running a script upgrades in place. No duplicate installs, no appended shell-rc blocks, no runaway cache. |
 | **Fail-soft** | One failing step never aborts the rest of the run. Missing tools are skipped with a note, not treated as errors. |
 | **Dry-run first** | `--dry-run` is supported on every script that mutates state (except the explicitly minimal `v1_stay_fresh.sh`). No `sudo` prompt is triggered in dry-run. |
-| **Logged** | Every non-trivial script writes a timestamped log to `$TMPDIR`. `--verbose` also streams to the terminal. |
+| **Logged** | Scripts support `--verbose` for live output. `stay_fresh.sh` also supports `--log-file <path>` when you want a transcript; by default it does **not** write a log file. |
 | **No hidden writes** | Shell rc files are modified only when you pass `--setup-shell`. Every such block is bracketed by markers so it can be found and removed. |
 | **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
 | **Sudo only when needed** | Scripts request `sudo` once at startup, keep it warm for the run, and release it on exit. Running as `root` is refused. |
@@ -342,10 +342,9 @@ path is protected by System Integrity Protection.
 9. Remove diagnostic and crash reports (user and system).
 10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
     `autoremove`.
-11. Run `mise self-update`, update plugins, and upgrade tools.
-12. Update installed Helm plugins.
-13. Run `gcloud components update`.
-14. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
+11. Update installed Helm plugins.
+12. Run `gcloud components update`.
+13. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
     and `gcloud`.
 
 ### Usage
@@ -354,6 +353,7 @@ path is protected by System Integrity Protection.
 ./stay_fresh.sh                   # interactive, full run
 ./stay_fresh.sh --dry-run         # preview the plan
 ./stay_fresh.sh --yes --verbose   # non-interactive; stream output live
+./stay_fresh.sh --log-file /tmp/stay_fresh.log  # optional transcript
 ./stay_fresh.sh --brew-greedy     # also upgrade :latest / auto_updates casks
 ./stay_fresh.sh --no-sudo         # skip every step that requires sudo
 ./stay_fresh.sh --skip-devtools   # skip all dev-tool refresh steps at once
@@ -363,12 +363,15 @@ path is protected by System Integrity Protection.
 
 | Flag | Purpose |
 | --- | --- |
+| `--pretty` | Use the decorated UI (default is compact plain output). |
+| `--plain` | Force plain output (no ANSI / UTF-8 chrome). |
+| `--log-file PATH` | Write a log transcript to `PATH` (default: no log file). |
 | `--dry-run` | Show the plan; change nothing. |
 | `-y`, `--yes` | Skip confirmation prompts. |
 | `-v`, `--verbose` | Stream per-step output live. |
 | `--no-sudo` | Skip `purge`, DNS flush, system caches, and system diagnostics. |
 | `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
-| `--skip-devtools` | Shorthand for `--skip-mise --skip-helm-plugins --skip-gcloud --skip-versions`. |
+| `--skip-devtools` | Shorthand for `--skip-helm-plugins --skip-gcloud --skip-versions`. |
 | `--skip-memory` | Skip the `sudo purge` step. |
 | `--skip-dns` | Skip the DNS cache flush. |
 | `--skip-syscaches` | Skip system-cache cleanup. |
@@ -379,7 +382,6 @@ path is protected by System Integrity Protection.
 | `--skip-docker` | Skip Docker / OrbStack prune. |
 | `--skip-xcode` | Skip Xcode extras cleanup. |
 | `--skip-diagnostics` | Skip diagnostic and crash-report cleanup. |
-| `--skip-mise` | Skip `mise` update. |
 | `--skip-helm-plugins` | Skip Helm plugin updates. |
 | `--skip-gcloud` | Skip `gcloud components update`. |
 | `--skip-versions` | Skip the final version report. |
@@ -394,7 +396,7 @@ accounting, and closes with a summary that includes:
 - `df` delta on `/`.
 - Sum of per-step deltas (more precise than `df` alone).
 - Which steps passed, warned, were skipped, or failed.
-- Path to the full log file.
+- Optional log transcript path when `--log-file` is used.
 
 ### Exit codes
 
@@ -599,7 +601,11 @@ Homebrew / `pyenv` / `goenv` commands.
   `--brew-greedy`).
 - Updates `mise`, Helm plugins, and `gcloud` components when those
   tools are installed.
-- Writes `/tmp/stay_fresh-YYYYMMDD-HHMMSS.log`.
+- Writes **no log file by default**. If you want a transcript, pass:
+
+  ```bash
+  ./stay_fresh.sh --log-file /tmp/stay_fresh.log
+  ```
 - Does **not** modify any shell configuration files.
 
 ### `v1_stay_fresh.sh`

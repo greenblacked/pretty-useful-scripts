@@ -32,7 +32,7 @@ set -u
 set -o pipefail
 
 # ---------------------------------------------------------------------------
-# output helpers (TTY-aware colors)
+# output helpers (TTY-aware colors + layout)
 # ---------------------------------------------------------------------------
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -44,17 +44,162 @@ if [[ -t 1 ]]; then
   C_BLUE=$'\033[1;34m'
   C_MAGENTA=$'\033[1;35m'
   C_CYAN=$'\033[1;36m'
+  # Semantic colors (TTY only)
+  C_CLEAN="$C_BLUE"
+  C_REMOVE="$C_RED"
+  USE_FANCY_CHARS=1
+  # UTF-8 bytes — macOS /bin/bash is 3.2 and does not expand $'\uXXXX'; hex only.
+  CHAR_HR=$'\xe2\x94\x80'        # ─ light rule
+  CHAR_HR_HEAVY=$'\xe2\x95\x90'  # ═ section breaks / header chrome
+  CHAR_CHEVRON=$'\xe2\x80\xba'   # › list / step marker
+  CHAR_BULLET=$'\xe2\x80\xa2'    # • status prefix
+  CHAR_CHECK=$'\xe2\x9c\x93'     # ✓ on / success
+  CHAR_RING=$'\xe2\x97\x8b'      # ○ off / skipped
+  CHAR_TREE=$'\xe2\x94\x94'      # └ sub-action
+  CHAR_ROUND_TL=$'\xe2\x95\xad'  # ╭
+  CHAR_ROUND_TR=$'\xe2\x95\xae'  # ╮
+  CHAR_ROUND_BL=$'\xe2\x95\xaf'  # ╰
+  CHAR_ROUND_BR=$'\xe2\x95\xb0'  # ╯
 else
-  C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_MAGENTA='' C_CYAN=''
+  C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_MAGENTA='' C_CYAN='' C_CLEAN='' C_REMOVE=''
+  USE_FANCY_CHARS=0
+  CHAR_HR=''
+  CHAR_HR_HEAVY=''
+  CHAR_CHEVRON='>'
+  CHAR_BULLET='*'
+  CHAR_CHECK='+'
+  CHAR_RING='o'
+  CHAR_TREE='`'
+  CHAR_ROUND_TL=''
+  CHAR_ROUND_TR=''
+  CHAR_ROUND_BL=''
+  CHAR_ROUND_BR=''
 fi
 
+OUTPUT_MODE="plain" # plain (default) | pretty
+FORCE_PLAIN=0       # when 1, disable ANSI + UTF-8 chrome (used by --plain)
+
+is_pretty() { [[ "${OUTPUT_MODE:-plain}" == "pretty" ]]; }
+is_plain()  { [[ "${OUTPUT_MODE:-plain}" == "plain"  ]]; }
+
+apply_plain_style() {
+  # Ensure plain mode is stable/greppable (no ANSI, no UTF-8 chrome).
+  C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_MAGENTA='' C_CYAN='' C_CLEAN='' C_REMOVE=''
+  USE_FANCY_CHARS=0
+  CHAR_HR=''
+  CHAR_HR_HEAVY=''
+  CHAR_CHEVRON='>'
+  CHAR_BULLET='*'
+  CHAR_CHECK='+'
+  CHAR_RING='o'
+  CHAR_TREE='-'
+  CHAR_ROUND_TL=''
+  CHAR_ROUND_TR=''
+  CHAR_ROUND_BL=''
+  CHAR_ROUND_BR=''
+}
+
+term_cols() {
+  local c="${COLUMNS:-}"
+  if [[ -z "$c" ]] && command -v tput >/dev/null 2>&1; then
+    c="$(tput cols 2>/dev/null || true)"
+  fi
+  [[ -z "$c" || "$c" -lt 48 ]] && c=72
+  (( c > 104 )) && c=104
+  printf '%s' "$c"
+}
+
+# Repeat a single character or byte to width w (for rules and boxes).
+repeat_char() {
+  local ch="$1" w="$2" i s=""
+  for (( i = 0; i < w; i++ )); do s+="$ch"; done
+  printf '%s' "$s"
+}
+
+hr() {
+  local w
+  w="$(term_cols)"
+  is_plain && return 0
+  if (( USE_FANCY_CHARS )); then
+    printf "%s%s%s\n" "$C_DIM" "$(repeat_char "$CHAR_HR" "$w")" "$C_RESET"
+  else
+    printf "%s%s%s\n" "$C_DIM" "$(repeat_char '-' "$w")" "$C_RESET"
+  fi
+}
+
+hr_heavy() {
+  local w
+  w="$(term_cols)"
+  is_plain && return 0
+  if (( USE_FANCY_CHARS )); then
+    printf "%s%s%s\n" "$C_DIM" "$(repeat_char "$CHAR_HR_HEAVY" "$w")" "$C_RESET"
+  else
+    printf "%s%s%s\n" "$C_DIM" "$(repeat_char '=' "$w")" "$C_RESET"
+  fi
+}
+
+# macOS-like masthead (rounded bar + title + subtitle).
+masthead() {
+  if is_plain; then
+    printf '%s\n' "stay_fresh — macOS housekeeping"
+    return 0
+  fi
+  local w inner
+  w="$(term_cols)"
+  inner=$(( w - 2 ))
+  printf '\n'
+  if (( USE_FANCY_CHARS )); then
+    printf '%s%s%s%s%s\n' "$C_DIM" "$CHAR_ROUND_TL" "$(repeat_char "$CHAR_HR" "$inner")" "$CHAR_ROUND_TR" "$C_RESET"
+    printf '    %sstay_fresh%s\n' "$C_BOLD" "$C_RESET"
+    printf '    %sHousekeeping for this Mac%s\n' "$C_DIM" "$C_RESET"
+    printf '%s%s%s%s%s\n\n' "$C_DIM" "$CHAR_ROUND_BL" "$(repeat_char "$CHAR_HR" "$inner")" "$CHAR_ROUND_BR" "$C_RESET"
+  else
+    printf '%s\n\n' "${C_BOLD}stay_fresh${C_RESET} — ${C_DIM}macOS housekeeping${C_RESET}"
+  fi
+}
+
+# Major section: heavy rules + inset title (System Settings–style grouping).
+section() {
+  if is_plain; then
+    printf '\n==> %s\n' "$*"
+    return 0
+  fi
+  printf '\n'
+  hr_heavy
+  printf '    %s%s%s\n' "$C_BOLD" "$*" "$C_RESET"
+  hr
+}
+
+# Subsection: chevron + label.
+subsection() {
+  if is_plain; then
+    printf '==> %s\n' "$*"
+    return 0
+  fi
+  printf '\n    %s%s%s  %s%s%s\n' "$C_DIM" "$CHAR_CHEVRON" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"
+}
+
 bold()  { printf "%s%s%s\n" "$C_BOLD"    "$*" "$C_RESET"; }
-info()  { printf "%s[info]%s %s\n"  "$C_BLUE"   "$C_RESET" "$*"; }
-ok()    { printf "%s[ ok ]%s %s\n"  "$C_GREEN"  "$C_RESET" "$*"; }
-warn()  { printf "%s[warn]%s %s\n"  "$C_YELLOW" "$C_RESET" "$*"; }
-err()   { printf "%s[err ]%s %s\n"  "$C_RED"    "$C_RESET" "$*" 1>&2; }
-step()  { printf "\n%s==>%s %s%s%s\n" "$C_CYAN" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"; }
-hr()    { printf "%s%s%s\n" "$C_DIM" "--------------------------------------------------------------" "$C_RESET"; }
+info()  { is_plain && printf '%s\n' "$*" || printf '    %s%s%s  %s\n' "$C_BLUE" "$CHAR_BULLET" "$C_RESET" "$*"; }
+ok()    { is_plain && printf '%s\n' "$*" || printf '    %s%s%s  %s\n' "$C_GREEN" "$CHAR_CHECK" "$C_RESET" "$*"; }
+warn()  { is_plain && printf '%s\n' "$*" || printf '    %s%s%s  %s\n' "$C_YELLOW" "$CHAR_BULLET" "$C_RESET" "$*"; }
+err()   { is_plain && printf '%s\n' "$*" 1>&2 || printf '    %s%s%s  %s\n' "$C_RED" "$CHAR_BULLET" "$C_RESET" "$*" 1>&2; }
+step()  {
+  if is_plain; then
+    printf '==> %s\n' "$*"
+    return 0
+  fi
+  printf '\n    %s%s%s  %s%s%s\n' "$C_CYAN" "$CHAR_CHEVRON" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"
+}
+
+# Aligned key / value for summaries (inset like a preferences panel).
+kv_line() {
+  if is_plain; then
+    printf '%s: %s\n' "$1" "$2"
+    return 0
+  fi
+  printf '    %s%-36s%s  %s\n' "$C_DIM" "$1" "$C_RESET" "$2"
+}
 
 # ---------------------------------------------------------------------------
 # defaults / CLI parsing
@@ -81,7 +226,9 @@ SKIP_DIAGNOSTICS=0
 BREW_GREEDY=0
 
 LOG_DIR="${TMPDIR:-/tmp}"
-LOG_FILE="$LOG_DIR/stay_fresh-$(date +%Y%m%d-%H%M%S).log"
+LOG_ENABLED=0
+LOG_FILE=""
+LOG_ERR_TARGET="/dev/null"
 
 # step accounting
 STEPS_OK=()
@@ -95,6 +242,8 @@ STEP_FREED_B=0
 TOTAL_FREED_B=0
 # Count of non-zero run_cmd invocations in the current step. Reset by do_step.
 STEP_WARN_COUNT=0
+# Marks whether a step performed a “cleanup” action (for blue "cleaned" label).
+STEP_CLEANED=0
 
 usage() {
   cat <<EOF
@@ -104,9 +253,13 @@ ${C_BOLD}Usage:${C_RESET}
   $(basename "$0") [options]
 
 ${C_BOLD}General options:${C_RESET}
+  --pretty               Decorated UI (current style). Default is plain.
+  --plain                Force plain output (no color/UTF-8 chrome)
+  --log-file <path>      Write a log file to <path> (default: no log file)
+  --no-log               Disable file logging (default)
   --dry-run              Preview actions, change nothing
   --yes, -y              Don't prompt for confirmation
-  --verbose, -v          Stream command output (default: captured to log)
+  --verbose, -v          Stream command output to terminal
   --no-sudo              Skip steps that require sudo
   --help, -h             Show this help
 
@@ -136,6 +289,18 @@ EOF
 
 while (( $# > 0 )); do
   case "$1" in
+    --pretty)          OUTPUT_MODE="pretty" ;;
+    --plain)           OUTPUT_MODE="plain"; FORCE_PLAIN=1 ;;
+    --log-file)
+      shift
+      [[ $# -gt 0 ]] || { err "--log-file requires a path"; echo; usage; exit 3; }
+      LOG_ENABLED=1
+      LOG_FILE="$1"
+      ;;
+    --no-log)
+      LOG_ENABLED=0
+      LOG_FILE=""
+      ;;
     --dry-run)         DRY_RUN=1 ;;
     -y|--yes)          ASSUME_YES=1 ;;
     -v|--verbose)      VERBOSE=1 ;;
@@ -161,6 +326,17 @@ while (( $# > 0 )); do
   shift
 done
 
+# Apply output styling overrides after argument parsing.
+if (( FORCE_PLAIN )); then
+  apply_plain_style
+fi
+
+if (( LOG_ENABLED )); then
+  LOG_ERR_TARGET="$LOG_FILE"
+  mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+  : > "$LOG_FILE" || { err "cannot write log file: $LOG_FILE"; exit 2; }
+fi
+
 # --skip-devtools is a convenience; fan it out across the individual
 # dev-tool refresh steps so the plan/summary accurately reflects what runs.
 if (( SKIP_DEVTOOLS )); then
@@ -183,9 +359,9 @@ human_duration() {
 human_bytes() {
   local b="$1" sign=""
   if (( b < 0 )); then sign="-"; b=$(( -b )); fi
-  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(echo "scale=2; $b/1073741824" | bc)"
-  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(echo "scale=2; $b/1048576"    | bc)"
-  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(echo "scale=2; $b/1024"       | bc)"
+  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1073741824}')"
+  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')"
+  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1024}')"
   else                            printf "%s%dB"    "$sign" "$b"
   fi
 }
@@ -210,19 +386,37 @@ path_bytes() {
 run_cmd() {
   local label="$1"; shift
   if (( DRY_RUN )); then
-    printf "  %s(dry-run)%s %s %s[%s]%s\n" \
-      "$C_DIM" "$C_RESET" "$*" "$C_DIM" "$label" "$C_RESET"
+    if is_plain; then
+      printf '    (dry-run) %s  # %s\n' "$*" "$label"
+    else
+      printf '        %s(dry-run)%s  %s  %s%s\n' \
+        "$C_DIM" "$C_RESET" "$*" "$C_DIM" "$label" "$C_RESET"
+    fi
     return 0
   fi
-  printf "  %s->%s %s\n" "$C_CYAN" "$C_RESET" "$label"
-  echo "# $(date '+%H:%M:%S') [$label] >> $*" >>"$LOG_FILE"
+  if ! is_plain; then
+    printf '        %s%s%s  %s\n' "$C_DIM" "$CHAR_TREE" "$C_CYAN" "$label$C_RESET"
+  fi
+  if (( LOG_ENABLED )); then
+    echo "# $(date '+%H:%M:%S') [$label] >> $*" >>"$LOG_FILE"
+  fi
   local rc=0
   if (( VERBOSE )); then
-    "$@" 2>&1 | tee -a "$LOG_FILE"
-    rc="${PIPESTATUS[0]}"
+    if (( LOG_ENABLED )); then
+      "$@" 2>&1 | tee -a "$LOG_FILE"
+      rc="${PIPESTATUS[0]}"
+    else
+      "$@"
+      rc=$?
+    fi
   else
-    "$@" >>"$LOG_FILE" 2>&1
-    rc=$?
+    if (( LOG_ENABLED )); then
+      "$@" >>"$LOG_FILE" 2>&1
+      rc=$?
+    else
+      "$@" >/dev/null 2>&1
+      rc=$?
+    fi
   fi
   if (( rc != 0 )); then
     STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
@@ -237,19 +431,37 @@ run_cmd() {
 run_cmd_tty() {
   local label="$1"; shift
   if (( DRY_RUN )); then
-    printf "  %s(dry-run)%s %s %s[%s]%s\n" \
-      "$C_DIM" "$C_RESET" "$*" "$C_DIM" "$label" "$C_RESET"
+    if is_plain; then
+      printf '    (dry-run) %s  # %s\n' "$*" "$label"
+    else
+      printf '        %s(dry-run)%s  %s  %s%s\n' \
+        "$C_DIM" "$C_RESET" "$*" "$C_DIM" "$label" "$C_RESET"
+    fi
     return 0
   fi
-  printf "  %s->%s %s\n" "$C_CYAN" "$C_RESET" "$label"
-  echo "# $(date '+%H:%M:%S') [$label] >> $*" >>"$LOG_FILE"
+  if ! is_plain; then
+    printf '        %s%s%s  %s\n' "$C_DIM" "$CHAR_TREE" "$C_CYAN" "$label$C_RESET"
+  fi
+  if (( LOG_ENABLED )); then
+    echo "# $(date '+%H:%M:%S') [$label] >> $*" >>"$LOG_FILE"
+  fi
   local rc=0
   if [[ -r /dev/tty && -w /dev/tty ]]; then
-    "$@" </dev/tty 2>&1 | tee -a "$LOG_FILE"
-    rc="${PIPESTATUS[0]}"
+    if (( LOG_ENABLED )); then
+      "$@" </dev/tty 2>&1 | tee -a "$LOG_FILE"
+      rc="${PIPESTATUS[0]}"
+    else
+      "$@" </dev/tty
+      rc=$?
+    fi
   else
-    "$@" 2>&1 | tee -a "$LOG_FILE"
-    rc="${PIPESTATUS[0]}"
+    if (( LOG_ENABLED )); then
+      "$@" 2>&1 | tee -a "$LOG_FILE"
+      rc="${PIPESTATUS[0]}"
+    else
+      "$@"
+      rc=$?
+    fi
   fi
   if (( rc != 0 )); then
     STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
@@ -262,36 +474,62 @@ run_cmd_tty() {
 # Usage: clear_dir <path> [sudo]
 clear_dir() {
   local dir="$1" use_sudo="${2:-}" before_b after_b delta
+  STEP_CLEANED=1
+  # Safety rails: refuse obviously dangerous targets.
+  if [[ -z "${dir:-}" || "$dir" == "/" || "$dir" == "$HOME" ]]; then
+    warn "refusing to clear unsafe path: '${dir:-<empty>}'"
+    STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    return 1
+  fi
   if [[ ! -d "$dir" ]]; then
-    printf "  %s- %s (missing, skipped)%s\n" "$C_DIM" "$dir" "$C_RESET"
+    if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+      printf '        %s%s%s  %s (missing)%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$dir" "$C_RESET"
+    fi
     return 0
   fi
   before_b="$(path_bytes "$dir")"
-  printf "  clearing %s %s(%s)%s\n" "$dir" "$C_DIM" "$(human_bytes "$before_b")" "$C_RESET"
+  if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+    printf '        %s%s%s  %s  %s(%s)%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$dir" "$C_DIM" "$(human_bytes "$before_b")" "$C_RESET"
+  fi
   if (( DRY_RUN )); then
-    printf "  %s(dry-run) would remove contents of %s%s\n" "$C_DIM" "$dir" "$C_RESET"
+    if is_plain; then
+      printf '    (dry-run) would clear %s\n' "$dir"
+    else
+      printf '        %s(dry-run)%s  would clear %s\n' "$C_DIM" "$C_RESET" "$dir"
+    fi
     return 0
   fi
+  if (( LOG_ENABLED )); then
+    echo "# $(date '+%H:%M:%S') [clear_dir] $dir (sudo=${use_sudo:-no})" >>"$LOG_FILE"
+  fi
   if [[ "$use_sudo" == "sudo" ]]; then
-    sudo find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>>"$LOG_FILE" || true
+    sudo find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>>"$LOG_ERR_TARGET" || true
   else
-    find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>>"$LOG_FILE" || true
+    find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>>"$LOG_ERR_TARGET" || true
   fi
   after_b="$(path_bytes "$dir")"
   delta=$(( before_b - after_b ))
   (( delta > 0 )) && STEP_FREED_B=$(( STEP_FREED_B + delta ))
-  printf "  %s->%s freed %s from %s\n" "$C_GREEN" "$C_RESET" "$(human_bytes "$delta")" "$dir"
+  if ! is_plain || (( VERBOSE )); then
+    if (( USE_FANCY_CHARS )); then
+      printf '        %s%s%s  freed %s  %s%s%s\n' "$C_GREEN" "$CHAR_CHECK" "$C_RESET" "$(human_bytes "$delta")" "$C_DIM" "$dir" "$C_RESET"
+    else
+      printf '        %s->%s freed %s from %s\n' "$C_GREEN" "$C_RESET" "$(human_bytes "$delta")" "$dir"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
 # preflight checks
 # ---------------------------------------------------------------------------
-bold "=== stay_fresh: preflight checks ==="
+masthead
 
-mkdir -p "$LOG_DIR"
-: > "$LOG_FILE"
-echo "stay_fresh.sh log - $(date)" >> "$LOG_FILE"
-info "log file: $C_DIM$LOG_FILE$C_RESET"
+section "Preflight"
+
+if (( LOG_ENABLED )); then
+  echo "stay_fresh.sh log - $(date)" >> "$LOG_FILE"
+  info "log file: $C_DIM$LOG_FILE$C_RESET"
+fi
 
 # 1. macOS only
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -390,16 +628,21 @@ SKIP_DIAGNOSTICS_SYS="${SKIP_DIAGNOSTICS_SYS:-0}"
 # ---------------------------------------------------------------------------
 # plan + confirmation
 # ---------------------------------------------------------------------------
-hr
-bold "Plan:"
-printf "  %-34s %s\n" "STEP" "STATUS"
-printf "  %-34s %s\n" "----" "------"
+subsection "What will run"
 plan_line() {
   local name="$1" active="$2" extra="${3:-}"
+  if is_plain; then
+    if (( active )); then
+      printf '    - %s%s\n' "$name" "${extra:+ ($extra)}"
+    else
+      printf '    - %s (skip)\n' "$name"
+    fi
+    return 0
+  fi
   if (( active )); then
-    printf "  %-34s %brun%b %s\n" "$name" "$C_GREEN" "$C_RESET" "$extra"
+    printf '        %s  %-38s  %s%-3s%s %s\n' "$CHAR_CHECK" "$name" "$C_GREEN" "On" "$C_RESET" "$extra"
   else
-    printf "  %-34s %bskip%b %s\n" "$name" "$C_DIM" "$C_RESET" "$extra"
+    printf '        %s  %-38s  %s%-3s%s %s\n' "$CHAR_RING" "$name" "$C_DIM" "Off" "$C_RESET" "$extra"
   fi
 }
 plan_line "purge inactive memory"             "$(( 1 - SKIP_MEMORY      ))" "sudo purge"
@@ -418,14 +661,14 @@ plan_line "report active versions"            "$(( 1 - SKIP_VERSIONS    ))" "pye
 hr
 
 if (( DRY_RUN )); then
-  bold "Dry run — no changes will be made."
+  printf '\n    %sDry run — nothing will be changed.%s\n\n' "$C_YELLOW$C_BOLD" "$C_RESET"
 fi
 
 if (( ASSUME_YES == 0 )) && (( DRY_RUN == 0 )); then
   if [[ ! -t 0 ]]; then
     info "non-interactive stdin — auto-proceeding (use --yes to silence)"
   else
-    printf "%sProceed? [y/N]%s " "$C_BOLD" "$C_RESET"
+    printf '\n    %sContinue?%s  [y/N] ' "$C_BOLD" "$C_RESET"
     read -r answer
     case "$answer" in
       y|Y|yes|YES) ;;
@@ -444,9 +687,9 @@ fi
 # Appends per-step bytes freed to the bookkeeping entry when > 0.
 do_step() {
   local label="$1" fn="$2" t_start t_end rc=0 dur freed_str="" entry
-  step "$label"
   STEP_WARN_COUNT=0
   STEP_FREED_B=0
+  STEP_CLEANED=0
   t_start=$(date +%s)
   if "$fn"; then rc=0; else rc=$?; fi
   t_end=$(date +%s)
@@ -457,13 +700,41 @@ do_step() {
   fi
   entry="$label  (${dur}${freed_str})"
   if (( rc != 0 )); then
-    err "$label failed in $dur$freed_str — see log"
+    if is_plain; then
+      printf '==> %s  FAIL (%s)\n' "$label" "$dur"
+    else
+      err "$label failed in $dur$freed_str — see log"
+    fi
     STEPS_FAIL+=("$entry")
   elif (( STEP_WARN_COUNT > 0 )); then
-    warn "$label finished with $STEP_WARN_COUNT warning(s) in $dur$freed_str — see log"
+    if is_plain; then
+      local extra=""
+      if (( STEP_CLEANED )); then
+        extra="${extra}${extra:+, }${C_CLEAN}cleaned${C_RESET}"
+      fi
+      if (( STEP_FREED_B > 0 )); then
+        extra="${extra}${extra:+, }${C_REMOVE}removed $(human_bytes "$STEP_FREED_B")${C_RESET}"
+      fi
+      [[ -n "$extra" ]] && extra=", $extra"
+      printf '==> %s  WARN (%s%s)\n' "$label" "$dur" "$extra"
+    else
+      warn "$label finished with $STEP_WARN_COUNT warning(s) in $dur$freed_str — see log"
+    fi
     STEPS_WARN+=("$entry")
   else
-    ok "$label done in $dur$freed_str"
+    if is_plain; then
+      local extra=""
+      if (( STEP_CLEANED )); then
+        extra="${extra}${extra:+, }${C_CLEAN}cleaned${C_RESET}"
+      fi
+      if (( STEP_FREED_B > 0 )); then
+        extra="${extra}${extra:+, }${C_REMOVE}removed $(human_bytes "$STEP_FREED_B")${C_RESET}"
+      fi
+      [[ -n "$extra" ]] && extra=", $extra"
+      printf '==> %s  OK (%s%s)\n' "$label" "$dur" "$extra"
+    else
+      ok "$label done in $dur$freed_str"
+    fi
     STEPS_OK+=("$entry")
   fi
 }
@@ -472,27 +743,37 @@ do_step() {
 # steps
 # ---------------------------------------------------------------------------
 step_memory() {
+  STEP_CLEANED=0
   run_cmd "purge memory" sudo purge
 }
 
 step_dns() {
+  STEP_CLEANED=0
   run_cmd "flush DNS"            sudo dscacheutil -flushcache
   run_cmd "reload mDNSResponder" sudo killall -HUP mDNSResponder
 }
 
 step_syscaches() {
+  STEP_CLEANED=1
   clear_dir "/Library/Caches"        sudo
   if [[ -d /System/Library/Caches ]]; then
-    printf "  /System/Library/Caches: removing writable entries only\n"
+    if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+      printf '        %s%s%s  /System/Library/Caches (writable entries only)\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET"
+    fi
     if (( DRY_RUN == 0 )); then
       sudo find /System/Library/Caches -mindepth 1 -maxdepth 2 -writable -exec rm -rf {} + 2>>"$LOG_FILE" || true
     else
-      printf "  %s(dry-run) would remove writable entries in /System/Library/Caches%s\n" "$C_DIM" "$C_RESET"
+      if is_plain; then
+        printf '    (dry-run) would clear writable entries in /System/Library/Caches\n'
+      else
+        printf '        %s(dry-run)%s  would clear writable entries in /System/Library/Caches\n' "$C_DIM" "$C_RESET"
+      fi
     fi
   fi
 }
 
 step_usercaches() {
+  STEP_CLEANED=1
   local targets=(
     "$HOME/Library/Caches"
     "$HOME/Library/Logs"
@@ -506,41 +787,34 @@ step_usercaches() {
 }
 
 step_trash() {
+  STEP_CLEANED=1
   local trash="$HOME/.Trash"
   if [[ ! -d "$trash" ]]; then
     warn "~/.Trash not found"
     return 0
   fi
-  local before_b after_b delta
-  before_b="$(path_bytes "$trash")"
-  printf "  %s %s(%s)%s\n" "$trash" "$C_DIM" "$(human_bytes "$before_b")" "$C_RESET"
-  if (( DRY_RUN )); then
-    printf "  %s(dry-run) would empty ~/.Trash%s\n" "$C_DIM" "$C_RESET"
-    return 0
-  fi
-  # -mindepth 1 skips $trash itself; -delete handles hidden files and avoids the
-  # '.' / '..' issues that 'rm -rf "$trash"/.*' produces.
-  find "$trash" -mindepth 1 -delete 2>>"$LOG_FILE" || true
-  after_b="$(path_bytes "$trash")"
-  delta=$(( before_b - after_b ))
-  (( delta > 0 )) && STEP_FREED_B=$(( STEP_FREED_B + delta ))
-  printf "  %s->%s freed %s from ~/.Trash\n" "$C_GREEN" "$C_RESET" "$(human_bytes "$delta")"
+  clear_dir "$trash"
 }
 
 step_devcaches() {
+  STEP_CLEANED=1
   local any=0
 
   if command -v npm >/dev/null 2>&1; then
     any=1
     local d="$HOME/.npm"
-    printf "  npm cache %s(%s)%s\n" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
+    if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+      printf '        %s%s%s  npm cache  %s(%s)%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
+    fi
     run_cmd "npm cache clean --force" npm cache clean --force || warn "'npm cache clean' failed"
   fi
 
   if command -v yarn >/dev/null 2>&1; then
     any=1
     local d="$HOME/Library/Caches/Yarn"
-    printf "  yarn cache %s(%s)%s\n" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
+    if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+      printf '        %s%s%s  yarn cache  %s(%s)%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
+    fi
     run_cmd "yarn cache clean" yarn cache clean || warn "'yarn cache clean' failed"
   fi
 
@@ -579,6 +853,7 @@ step_devcaches() {
 }
 
 step_docker() {
+  STEP_CLEANED=1
   if ! command -v docker >/dev/null 2>&1; then
     warn "docker not on PATH"
     return 1
@@ -591,7 +866,9 @@ step_docker() {
   # Size before
   local before
   before="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null | awk -F'\t' '{print $1": "$2}' | paste -sd ', ' - || echo 'unknown')"
-  printf "  docker disk usage: %s%s%s\n" "$C_DIM" "$before" "$C_RESET"
+  if ! is_plain || (( DRY_RUN )) || (( VERBOSE )); then
+    printf '        %s%s%s  docker disk usage: %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$before" "$C_RESET"
+  fi
 
   run_cmd "docker system prune -af --volumes" docker system prune -af --volumes \
     || warn "'docker system prune' failed"
@@ -600,6 +877,7 @@ step_docker() {
 }
 
 step_xcode() {
+  STEP_CLEANED=1
   local any=0
   local targets=(
     "$HOME/Library/Developer/Xcode/Archives"
@@ -627,6 +905,7 @@ step_xcode() {
 }
 
 step_diagnostics() {
+  STEP_CLEANED=1
   # User diagnostic / crash reports
   local user_dirs=(
     "$HOME/Library/Logs/DiagnosticReports"
@@ -651,6 +930,7 @@ step_diagnostics() {
 }
 
 step_brew() {
+  STEP_CLEANED=1
   if ! command -v brew >/dev/null 2>&1; then
     warn "brew not on PATH"
     return 1
@@ -700,6 +980,7 @@ step_brew() {
 # Helm plugins are outside of brew's world, so they go stale quickly.
 # 'helm plugin update <name>' pulls the latest release for each one.
 step_helm_plugins() {
+  STEP_CLEANED=1
   if ! command -v helm >/dev/null 2>&1; then
     info "helm not installed — nothing to refresh"
     return 0
@@ -722,6 +1003,7 @@ step_helm_plugins() {
 # SDK dir and aren't refreshed by 'brew upgrade'. Components installed via
 # brew directly are already covered by the brew step.
 step_gcloud() {
+  STEP_CLEANED=1
   if ! command -v gcloud >/dev/null 2>&1; then
     info "gcloud not installed — nothing to refresh"
     return 0
@@ -741,36 +1023,37 @@ step_gcloud() {
 # the brew step keeps the managers fresh, re-run install_devtools.sh to move
 # to a new Python/Go/Terraform minor.
 step_versions() {
+  STEP_CLEANED=0
   local any=0 line
   if command -v pyenv >/dev/null 2>&1; then
     any=1
     line="$(pyenv version-name 2>/dev/null || echo '?')"
-    printf "  pyenv active:  %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  pyenv   %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if command -v goenv >/dev/null 2>&1; then
     any=1
     line="$(goenv version-name 2>/dev/null || echo '?')"
-    printf "  goenv active:  %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  goenv   %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if command -v tfenv >/dev/null 2>&1; then
     any=1
     line="$(tfenv version-name 2>/dev/null || echo '?')"
-    printf "  tfenv active:  %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  tfenv   %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if command -v tenv >/dev/null 2>&1; then
     any=1
     line="$(tenv tf current 2>/dev/null || echo '?')"
-    printf "  tenv   active: %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  tenv    %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if command -v helm >/dev/null 2>&1; then
     any=1
     line="$(helm version --short 2>/dev/null | head -n1 || echo '?')"
-    printf "  helm:          %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  helm    %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if command -v gcloud >/dev/null 2>&1; then
     any=1
     line="$(gcloud version 2>/dev/null | head -n1 || echo '?')"
-    printf "  gcloud:        %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    printf '        %s%s%s  gcloud  %s%s%s\n' "$C_DIM" "$CHAR_BULLET" "$C_RESET" "$C_DIM" "$line" "$C_RESET"
   fi
   if (( any == 0 )); then
     info "no dev toolchain managers found (pyenv/goenv/tfenv/tenv/helm/gcloud) — nothing to report"
@@ -785,8 +1068,16 @@ START_ALL=$(date +%s)
 run_or_skip() {
   local label="$1" skip_flag="$2" fn="$3"
   if (( skip_flag )); then
-    step "$label"
-    printf "  %sskipped%s\n" "$C_DIM" "$C_RESET"
+    if is_plain; then
+      printf '==> %s ... SKIP\n' "$label"
+    else
+      step "$label"
+      if (( USE_FANCY_CHARS )); then
+        printf '        %s%s%s  %sSkipped%s\n' "$C_DIM" "$CHAR_RING" "$C_RESET" "$C_DIM" "$C_RESET"
+      else
+        printf '        %sskipped%s\n' "$C_DIM" "$C_RESET"
+      fi
+    fi
     STEPS_SKIP+=("$label")
     return 0
   fi
@@ -814,37 +1105,55 @@ RECLAIMED_B=$(( FREE_AFTER_B - FREE_BEFORE_B ))
 # ---------------------------------------------------------------------------
 # summary
 # ---------------------------------------------------------------------------
-hr
-bold "=== stay_fresh: summary ==="
-printf "  elapsed:     %s\n" "$(human_duration "$ELAPSED")"
-printf "  disk free:   %s -> %s  %s(%s reclaimed)%s\n" \
-  "$(human_bytes "$FREE_BEFORE_B")" \
-  "$(human_bytes "$FREE_AFTER_B")" \
-  "$C_GREEN" "$(human_bytes "$RECLAIMED_B")" "$C_RESET"
-printf "  steps freed: %s%s%s %s(sum of per-step deltas; more precise than df)%s\n" \
-  "$C_GREEN" "$(human_bytes "$TOTAL_FREED_B")" "$C_RESET" "$C_DIM" "$C_RESET"
-printf "  ok steps:    %s%d%s\n" "$C_GREEN"  "${#STEPS_OK[@]}"   "$C_RESET"
-printf "  warn steps:  %s%d%s\n" "$C_YELLOW" "${#STEPS_WARN[@]}" "$C_RESET"
-printf "  skipped:     %s%d%s\n" "$C_DIM"    "${#STEPS_SKIP[@]}" "$C_RESET"
-printf "  failed:      %s%d%s\n" "$C_RED"    "${#STEPS_FAIL[@]}" "$C_RESET"
+section "Summary"
+
+kv_line "Elapsed" "$(human_duration "$ELAPSED")"
+kv_line "Disk free (before → after)" \
+  "$(human_bytes "$FREE_BEFORE_B") → $(human_bytes "$FREE_AFTER_B")"
+kv_line "Reclaimed (df delta)" \
+  "${C_GREEN}$(human_bytes "$RECLAIMED_B")${C_RESET}"
+kv_line "Freed (step totals)" \
+  "${C_GREEN}$(human_bytes "$TOTAL_FREED_B")${C_RESET} ${C_DIM}(sum of per-step clears; can differ from df)${C_RESET}"
+
+printf '\n'
+kv_line "Steps OK"    "${C_GREEN}${#STEPS_OK[@]}${C_RESET}"
+kv_line "Warnings"   "${C_YELLOW}${#STEPS_WARN[@]}${C_RESET}"
+kv_line "Skipped"    "${C_DIM}${#STEPS_SKIP[@]}${C_RESET}"
+kv_line "Failed"     "${C_RED}${#STEPS_FAIL[@]}${C_RESET}"
 
 print_group() {
-  local title="$1" color="$2"; shift 2
+  local title="$1" color="$2" bullet="$3"; shift 3
   (( $# == 0 )) && return 0
-  printf "\n%s%s:%s\n" "$color" "$title" "$C_RESET"
-  for item in "$@"; do printf "  - %s\n" "$item"; done
+  if is_plain; then
+    printf '\n%s\n' "$title"
+    for item in "$@"; do printf '  - %s\n' "$item"; done
+  else
+    printf '\n    %s%s%s  %s%s%s\n' "$C_DIM" "$CHAR_CHEVRON" "$C_RESET" "$color" "$title" "$C_RESET"
+    for item in "$@"; do printf '        %s  %s\n' "$bullet" "$item"; done
+  fi
 }
 
-(( ${#STEPS_OK[@]}   > 0 )) && print_group "OK"      "$C_GREEN"  "${STEPS_OK[@]}"
-(( ${#STEPS_WARN[@]} > 0 )) && print_group "Warned"  "$C_YELLOW" "${STEPS_WARN[@]}"
-(( ${#STEPS_SKIP[@]} > 0 )) && print_group "Skipped" "$C_DIM"    "${STEPS_SKIP[@]}"
-(( ${#STEPS_FAIL[@]} > 0 )) && print_group "Failed"  "$C_RED"    "${STEPS_FAIL[@]}"
+if (( USE_FANCY_CHARS )); then
+  (( ${#STEPS_OK[@]}   > 0 )) && print_group "Completed" "$C_GREEN"  "✓" "${STEPS_OK[@]}"
+  (( ${#STEPS_WARN[@]} > 0 )) && print_group "With warnings" "$C_YELLOW" "!" "${STEPS_WARN[@]}"
+  (( ${#STEPS_SKIP[@]} > 0 )) && print_group "Skipped" "$C_DIM"    "○" "${STEPS_SKIP[@]}"
+  (( ${#STEPS_FAIL[@]} > 0 )) && print_group "Failed"  "$C_RED"    "✗" "${STEPS_FAIL[@]}"
+else
+  (( ${#STEPS_OK[@]}   > 0 )) && print_group "Completed" "$C_GREEN"  "-" "${STEPS_OK[@]}"
+  (( ${#STEPS_WARN[@]} > 0 )) && print_group "With warnings" "$C_YELLOW" "!" "${STEPS_WARN[@]}"
+  (( ${#STEPS_SKIP[@]} > 0 )) && print_group "Skipped" "$C_DIM"    "-" "${STEPS_SKIP[@]}"
+  (( ${#STEPS_FAIL[@]} > 0 )) && print_group "Failed"  "$C_RED"    "x" "${STEPS_FAIL[@]}"
+fi
 
 echo
-info "full log: $LOG_FILE"
+info "full log: $C_DIM$LOG_FILE$C_RESET"
 
 if (( ${#STEPS_FAIL[@]} > 0 )); then
   exit 1
 fi
 
-ok "You're fresh. Consider a reboot if things still feel sluggish."
+if (( USE_FANCY_CHARS )); then
+  ok "All set — you're fresh. Reboot if the system still feels sluggish."
+else
+  ok "You're fresh. Consider a reboot if things still feel sluggish."
+fi

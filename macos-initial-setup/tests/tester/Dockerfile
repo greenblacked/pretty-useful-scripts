@@ -2,11 +2,14 @@
 # (Full install/refresh behavior is macOS-only and is not executed here.)
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash \
-    shellcheck \
-    zsh \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        shellcheck \
+        zsh \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 ENV REPO_ROOT=/repo
 WORKDIR /repo
