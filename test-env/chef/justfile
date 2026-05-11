@@ -1,0 +1,51 @@
+# Common Chef test-env tasks. Run `just` (or `just -l`) to list.
+# All recipes run inside the Docker runner so the host stays clean.
+
+set shell := ["bash", "-uc"]
+
+run := "./run.sh"
+
+# Default: show available recipes.
+default:
+    @just --list
+
+# Build / rebuild the runner image (after Gemfile or Dockerfile change).
+rebuild:
+    {{run}} --rebuild
+
+# Lint cookbooks with Cookstyle.
+lint:
+    {{run}} cookstyle --display-cop-names cookbooks
+
+# Auto-fix Cookstyle violations where possible.
+fix:
+    {{run}} cookstyle -a cookbooks
+
+# Lint YAML files.
+yamllint:
+    {{run}} yamllint -c .yamllint .
+
+# Run ChefSpec unit tests (fast — no containers spun up).
+spec:
+    {{run}} rspec cookbooks
+
+# Test Kitchen actions.
+list:
+    {{run}} kitchen list
+
+converge SUITE="all":
+    {{run}} kitchen converge {{SUITE}}
+
+verify SUITE="all":
+    {{run}} kitchen verify {{SUITE}}
+
+destroy SUITE="all":
+    {{run}} kitchen destroy {{SUITE}}
+
+# Full local CI loop: lint → yamllint → spec → kitchen verify (matches CI + verify).
+ci: lint yamllint spec
+    {{run}} kitchen verify ubuntu-2204
+
+# Interactive shell inside the runner.
+shell:
+    {{run}} --shell

@@ -1,0 +1,19 @@
+# Run Test Kitchen from Docker (host only needs Docker + Compose v2).
+# Use ../run.sh as the entry point.
+name: pretty-useful-chef-kitchen
+
+services:
+  kitchen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: pretty-useful-chef-kitchen
+    init: true
+    tty: true
+    stdin_open: true
+    working_dir: /chef
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - ..:/chef:rw
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -1,3 +1,7 @@
+test-env/chef/.kitchen/
+test-env/chef/kitchen.local.yml
+test-env/chef/vendor/bundle/
+
 **/__pycache__/
 *.py[cod]
 .pytest_cache/

@@ -11,6 +11,8 @@ on reducing repeat manual work.
 - macOS 12+ (Apple Silicon and Intel) — scripts use `bash`, aliases use `zsh`.
 - MikroTik RouterOS 7.22 — scripts are RouterOS scripting language (`.lua`
   extension is just for editor highlighting).
+- Chef Infra cookbooks — Test Kitchen + Cookstyle + ChefSpec + InSpec under
+  [`test-env/chef/`](test-env/chef/) (Docker runner on the host; CI uses Ruby only).
 
 ## Contents
 
@@ -21,6 +23,7 @@ on reducing repeat manual work.
 - [macOS setup at a glance](#macos-setup-at-a-glance)
 - [MikroTik scripts at a glance](#mikrotik-scripts-at-a-glance)
 - [Testing (Docker)](#testing-docker)
+- [Chef cookbook test env](#chef-cookbook-test-env)
 
 ## What's here
 
@@ -29,6 +32,7 @@ on reducing repeat manual work.
 | [`git/`](git/) | Git helper scripts for author profiles, quick add/commit/push flows, status summaries, branch cleanup, and local Docker-based checks. |
 | [`macos-initial-setup/`](macos-initial-setup/) | Bootstrap a fresh macOS workstation, install common apps and developer tools, keep Homebrew/toolchains fresh, and load useful zsh aliases. |
 | [`mikrotik/`](mikrotik/) | RouterOS 7.x scripts for backups, WiFi password rotation, WAN-state monitoring, health checks, and Telegram notifications. |
+| [`test-env/`](test-env/) | Sandboxed test harnesses. **[`chef/`](test-env/chef/)** runs Cookstyle, yamllint, ChefSpec, and **kitchen-dokken** (Test Kitchen + InSpec) inside Docker — [`run.sh`](test-env/chef/run.sh), [`justfile`](test-env/chef/justfile), [`.devcontainer/`](test-env/chef/.devcontainer/). |
 
 ## Quick start
 
@@ -188,12 +192,33 @@ flags, suggested scheduler entries, and RouterOS 7.22-specific gotchas
 
 ## Testing (Docker)
 
-Three folders ship **self-contained** Docker-based checks. You only need the
-Docker Engine and Compose v2 on the host — no local Python, shellcheck, or
-RouterOS install.
+Several areas ship **Docker-based** or **container-assisted** checks. For the
+Git and macOS folders you only need the Docker Engine and Compose v2 on the host
+— no local Python, ShellCheck, or RouterOS install.
 
 | Package | What runs | How |
 | --- | --- | --- |
 | [`git/`](git/) | **Static + behavior** checks for Git helper scripts (syntax, ShellCheck, `--help`, profile state, `gacp`, status, cleanup, recent branches, and sync against local temporary repos/remotes). | [`git/README.md#tests`](git/README.md#tests) — `./git/tests/run.sh` |
 | [`macos-initial-setup/`](macos-initial-setup/) | **Static** checks on the bash scripts and `zsh_aliases.zsh` (syntax, ShellCheck, `--help`, Linux “macOS only” preflight, zsh can source aliases). Does **not** install apps or run Homebrew — the scripts are macOS-only. | [`macos-initial-setup/README.md#development--docker-checks`](macos-initial-setup/README.md#development--docker-checks) — `./macos-initial-setup/tests/run.sh` |
 | [`mikrotik/`](mikrotik/) | **Integration** tests against a real **RouterOS 7.22 CHR** in QEMU, API-driven `pytest`. | [`mikrotik/tests/README.md`](mikrotik/tests/README.md) — `./mikrotik/tests/run.sh` |
+| [`test-env/chef/`](test-env/chef/) | **Cookstyle + yamllint + ChefSpec + Test Kitchen (kitchen-dokken + InSpec)** from a Ruby image that mounts the host Docker socket (DinD-style sibling containers). | [`test-env/chef/README.md`](test-env/chef/README.md) — `cd test-env/chef && ./run.sh …` or `just …` |
+
+## Chef cookbook test env
+
+The cookbook harness lives under **[`test-env/chef/`](test-env/chef/)**. Typical
+flows:
+
+```bash
+cd test-env/chef
+./run.sh cookstyle --display-cop-names cookbooks   # lint (same as CI)
+./run.sh yamllint -c .yamllint .                   # YAML (CI uses host pip)
+./run.sh rspec cookbooks                           # ChefSpec (same as CI)
+./run.sh kitchen verify                            # integration (Docker + socket)
+```
+
+Task shortcuts and the full layout are in
+[`test-env/chef/README.md`](test-env/chef/README.md). GitHub Actions runs
+**Cookstyle, yamllint, and ChefSpec** on changes under `test-env/chef/**` (see
+[`.github/workflows/chef.yml`](.github/workflows/chef.yml)); **Kitchen verify** is
+intended for local machines with Docker because it needs the Docker socket and
+privileged dokken containers.
