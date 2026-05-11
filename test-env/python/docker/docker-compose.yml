@@ -1,0 +1,38 @@
+# Python dev/test runner: host only needs Docker + Compose v2.
+# Use ../run.sh as the entry point.
+#
+# Two services share the same image:
+#   - dev: long-running container for `docker compose exec` workflows
+#          (`./run.sh up`, then `./run.sh <cmd>` execs into it — fast).
+#   - one-shot `run --rm` invocations still work via `./run.sh --once <cmd>`.
+name: pretty-useful-python-dev
+
+x-common: &common
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: pretty-useful-python-dev
+  init: true
+  working_dir: /python
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+  volumes:
+    - ..:/python:rw
+    - pip-cache:/root/.cache/pip
+
+services:
+  dev:
+    <<: *common
+    # Stay alive so we can `docker compose exec` repeatedly without re-creating.
+    command: ["sleep", "infinity"]
+    tty: true
+    stdin_open: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pip-cache:

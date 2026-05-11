@@ -9,6 +9,18 @@ run := "./run.sh"
 default:
     @just --list
 
+# Start the long-running runner container in the background.
+up:
+    {{run}} up
+
+# Stop and remove the runner container.
+down:
+    {{run}} down
+
+# Container status.
+ps:
+    {{run}} ps
+
 # Build / rebuild the runner image (after Gemfile or Dockerfile change).
 rebuild:
     {{run}} --rebuild
@@ -46,6 +58,6 @@ destroy SUITE="all":
 ci: lint yamllint spec
     {{run}} kitchen verify ubuntu-2204
 
-# Interactive shell inside the runner.
+# Interactive shell inside the running container.
 shell:
-    {{run}} --shell
+    {{run}} shell

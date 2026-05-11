@@ -12,6 +12,6 @@ fi
 
 # Tools that ship outside the Ruby bundle bypass `bundle exec`.
 case "${1}" in
-  bash|sh|yamllint|docker) exec "$@" ;;
-  *)                       exec bundle exec "$@" ;;
+  bash|sh|sleep|tail|yamllint|docker) exec "$@" ;;
+  *)                                  exec bundle exec "$@" ;;
 esac

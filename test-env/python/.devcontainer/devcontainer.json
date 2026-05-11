@@ -1,0 +1,23 @@
+{
+  "name": "python-dev",
+  "dockerComposeFile": "../docker/docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/python",
+  "overrideCommand": true,
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "EditorConfig.EditorConfig"
+      ],
+      "settings": {
+        "[python]": {
+          "editor.formatOnSave": true,
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "files.eol": "\n"
+      }
+    }
+  }
+}

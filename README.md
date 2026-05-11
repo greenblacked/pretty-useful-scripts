@@ -12,7 +12,9 @@ on reducing repeat manual work.
 - MikroTik RouterOS 7.22 — scripts are RouterOS scripting language (`.lua`
   extension is just for editor highlighting).
 - Chef Infra cookbooks — Test Kitchen + Cookstyle + ChefSpec + InSpec under
-  [`test-env/chef/`](test-env/chef/) (Docker runner on the host; CI uses Ruby only).
+  [`test-env/chef/`](test-env/chef/) (Docker runner on the host; CI uses Ruby + pip yamllint).
+- Python 3.12 sample package — Ruff, Ruff format, pytest, and optional mypy under
+  [`test-env/python/`](test-env/python/) (Docker dev container; CI uses `setup-python` only).
 
 ## Contents
 
@@ -24,6 +26,7 @@ on reducing repeat manual work.
 - [MikroTik scripts at a glance](#mikrotik-scripts-at-a-glance)
 - [Testing (Docker)](#testing-docker)
 - [Chef cookbook test env](#chef-cookbook-test-env)
+- [Python package test env](#python-package-test-env)
 
 ## What's here
 
@@ -32,7 +35,7 @@ on reducing repeat manual work.
 | [`git/`](git/) | Git helper scripts for author profiles, quick add/commit/push flows, status summaries, branch cleanup, and local Docker-based checks. |
 | [`macos-initial-setup/`](macos-initial-setup/) | Bootstrap a fresh macOS workstation, install common apps and developer tools, keep Homebrew/toolchains fresh, and load useful zsh aliases. |
 | [`mikrotik/`](mikrotik/) | RouterOS 7.x scripts for backups, WiFi password rotation, WAN-state monitoring, health checks, and Telegram notifications. |
-| [`test-env/`](test-env/) | Sandboxed test harnesses. **[`chef/`](test-env/chef/)** runs Cookstyle, yamllint, ChefSpec, and **kitchen-dokken** (Test Kitchen + InSpec) inside Docker — [`run.sh`](test-env/chef/run.sh), [`justfile`](test-env/chef/justfile), [`.devcontainer/`](test-env/chef/.devcontainer/). |
+| [`test-env/`](test-env/) | Sandboxed test harnesses — **[`chef/`](test-env/chef/)** ([`chef/run.sh`](test-env/chef/run.sh), kitchen-dokken) and **[`python/`](test-env/python/)** ([`python/run.sh`](test-env/python/run.sh), Ruff + pytest). Index: [`test-env/README.md`](test-env/README.md). |
 
 ## Quick start
 
@@ -202,6 +205,7 @@ Git and macOS folders you only need the Docker Engine and Compose v2 on the host
 | [`macos-initial-setup/`](macos-initial-setup/) | **Static** checks on the bash scripts and `zsh_aliases.zsh` (syntax, ShellCheck, `--help`, Linux “macOS only” preflight, zsh can source aliases). Does **not** install apps or run Homebrew — the scripts are macOS-only. | [`macos-initial-setup/README.md#development--docker-checks`](macos-initial-setup/README.md#development--docker-checks) — `./macos-initial-setup/tests/run.sh` |
 | [`mikrotik/`](mikrotik/) | **Integration** tests against a real **RouterOS 7.22 CHR** in QEMU, API-driven `pytest`. | [`mikrotik/tests/README.md`](mikrotik/tests/README.md) — `./mikrotik/tests/run.sh` |
 | [`test-env/chef/`](test-env/chef/) | **Cookstyle + yamllint + ChefSpec + Test Kitchen (kitchen-dokken + InSpec)** from a Ruby image that mounts the host Docker socket (DinD-style sibling containers). | [`test-env/chef/README.md`](test-env/chef/README.md) — `cd test-env/chef && ./run.sh …` or `just …` |
+| [`test-env/python/`](test-env/python/) | **Ruff (lint + format check) + pytest** from a Python 3.12 image; long-running `dev` service for fast `docker compose exec`. Optional **mypy** locally (`just typecheck`). | [`test-env/python/README.md`](test-env/python/README.md) — `cd test-env/python && ./run.sh …` or `just …` |
 
 ## Chef cookbook test env
 
@@ -218,7 +222,27 @@ cd test-env/chef
 
 Task shortcuts and the full layout are in
 [`test-env/chef/README.md`](test-env/chef/README.md). GitHub Actions runs
-**Cookstyle, yamllint, and ChefSpec** on changes under `test-env/chef/**` (see
-[`.github/workflows/chef.yml`](.github/workflows/chef.yml)); **Kitchen verify** is
-intended for local machines with Docker because it needs the Docker socket and
-privileged dokken containers.
+**Cookstyle, yamllint, and ChefSpec** on pushes and pull requests that touch
+`test-env/chef/**` (see [`.github/workflows/chef.yml`](.github/workflows/chef.yml));
+**Kitchen verify** is intended for local machines with Docker because it needs the
+Docker socket and privileged dokken containers.
+
+## Python package test env
+
+The Python harness lives under **[`test-env/python/`](test-env/python/)**. Typical
+flows:
+
+```bash
+cd test-env/python
+./run.sh up
+./run.sh ruff check .
+./run.sh ruff format --check .
+./run.sh pytest -q
+./run.sh mypy              # optional; not in CI today
+```
+
+Task shortcuts and the full layout are in
+[`test-env/python/README.md`](test-env/python/README.md). GitHub Actions runs
+**Ruff** (`ruff check`, `ruff format --check`) and **pytest** on pushes and pull
+requests that touch `test-env/python/**` (see
+[`.github/workflows/python.yml`](.github/workflows/python.yml)).

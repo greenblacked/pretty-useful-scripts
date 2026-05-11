@@ -1,0 +1,75 @@
+Metadata-Version: 2.4
+Name: sample
+Version: 0.1.0
+Summary: Minimal package for the pretty-useful-scripts Python Docker test environment
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.8.0; extra == "dev"
+
+# Python test environment
+
+Develop and run checks in **Docker** so your laptop does not need a local Python
+toolchain for the default workflow. The image ships **Python 3.12**, **Ruff**,
+and **pytest**; your code lives under [`src/`](src/) (sample package **`sample`**)
+and [`tests/`](tests/).
+
+---
+
+## Layout
+
+| Path | Role |
+| --- | --- |
+| [`run.sh`](run.sh) | Entrypoint: `docker compose … run --rm dev …`. Supports `--rebuild`, `--shell`. |
+| [`justfile`](justfile) | Shortcuts: `just lint`, `just test`, `just ci`, … |
+| [`docker/Dockerfile`](docker/Dockerfile) | `python:3.12-slim-bookworm`, `pip install -e ".[dev]"` |
+| [`docker/docker-compose.yml`](docker/docker-compose.yml) | Mounts `..` → `/python` (rw) |
+| [`pyproject.toml`](pyproject.toml) | Package metadata, Ruff/pytest settings, optional **`dev`** extras |
+| [`.devcontainer/`](.devcontainer/) | Dev container (same stack as the runner) |
+| [`.editorconfig`](.editorconfig) | Editor defaults (4-space indents for Python) |
+
+---
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) with **Compose v2**
+- Optional: [`just`](https://github.com/casey/just) for [`justfile`](justfile) tasks
+
+---
+
+## Quick start
+
+From **`test-env/python`**:
+
+```bash
+./run.sh                    # default: pytest -q
+./run.sh ruff check .
+./run.sh ruff format --check .
+./run.sh pytest -q
+./run.sh --rebuild          # after pyproject.toml or Dockerfile edits
+./run.sh --shell            # bash inside the runner
+```
+
+With **`just`**:
+
+```bash
+just              # list recipes
+just lint         # ruff check
+just fix          # ruff check --fix
+just format-check # ruff format --check
+just format       # ruff format
+just test         # pytest
+just ci           # lint + format-check + test
+just shell        # interactive shell
+```
+
+After changing **dependencies** in `pyproject.toml`, run **`./run.sh --rebuild`**
+(or `just rebuild`) so the image picks them up.
+
+---
+
+## CI
+
+[`.github/workflows/python.yml`](../../.github/workflows/python.yml) runs Ruff
+and pytest when files under `test-env/python/**` change.

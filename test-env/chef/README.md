@@ -16,10 +16,10 @@ Ruby, Bundler, or pip installed locally for the default workflow.
 
 | Path | Role |
 | --- | --- |
-| [`run.sh`](run.sh) | Primary entrypoint: `docker compose … run --rm kitchen …`. Supports `--rebuild`, `--shell`. |
+| [`run.sh`](run.sh) | Primary entrypoint. Subcommands: `up`/`down`/`logs`/`ps`/`shell`. Flags: `--once`, `--rebuild`. |
 | [`justfile`](justfile) | Shortcuts: `just lint`, `just spec`, `just verify`, `just ci`, … |
 | [`docker/Dockerfile`](docker/Dockerfile) | `ruby:3.3-bookworm-slim`, build deps, **yamllint** (apt), Docker static CLI, `bundle install` |
-| [`docker/docker-compose.yml`](docker/docker-compose.yml) | Mounts `..` → `/chef` (rw) and `/var/run/docker.sock`; `init: true`, TTY for Kitchen |
+| [`docker/docker-compose.yml`](docker/docker-compose.yml) | Long-running `kitchen` service, mounts `..` → `/chef` and `/var/run/docker.sock` |
 | [`docker/entrypoint.sh`](docker/entrypoint.sh) | `bundle check \|\| bundle install`, then `bundle exec` (except `yamllint` / `docker` / `bash` / `sh`) |
 | [`kitchen.yml`](kitchen.yml) | dokken driver; platforms **Ubuntu 22.04/24.04**, **Debian 12**, **Rocky Linux 9**; suite `example` |
 | [`Gemfile`](Gemfile) | test-kitchen, kitchen-dokken, kitchen-inspec; Cookstyle + ChefSpec + Berkshelf in groups |
@@ -37,31 +37,41 @@ Ruby, Bundler, or pip installed locally for the default workflow.
 
 ---
 
-## Quick start
+## Quick start (long-running container — recommended)
 
 From **`test-env/chef`**:
 
 ```bash
-./run.sh                         # default: kitchen list
-./run.sh kitchen verify          # InSpec after converge (all matching instances)
+./run.sh up                          # start runner container in the background
+./run.sh kitchen verify              # exec — fast (no container re-create)
 ./run.sh cookstyle --display-cop-names cookbooks
 ./run.sh yamllint -c .yamllint .
 ./run.sh rspec cookbooks
-./run.sh --rebuild               # rebuild image after Gemfile / Dockerfile edits
-./run.sh --shell                 # bash inside the runner (debugging)
+./run.sh shell                       # interactive bash inside the runner
+./run.sh down                        # stop
 ```
 
 With **`just`**:
 
 ```bash
-just             # list recipes
+just up          # start runner
 just lint        # Cookstyle
 just yamllint    # YAML
 just spec        # ChefSpec (no Kitchen containers)
 just verify      # kitchen verify (all platforms in kitchen.yml)
 just ci          # lint + yamllint + spec + kitchen verify ubuntu-2204
 just shell       # interactive shell
+just down        # stop
 ```
+
+The runner stays alive between commands, so the second `kitchen` invocation
+skips container creation and gem load. Kitchen-dokken still spins up *test*
+containers as host siblings via the mounted Docker socket.
+
+## One-shot mode
+
+`./run.sh --once kitchen list` runs a throwaway container (old `run --rm`
+behavior). Useful in CI scripts where you don't want lingering state.
 
 Fast inner loop before Kitchen: **`just lint && just yamllint && just spec`**.
 
@@ -88,8 +98,10 @@ Fast inner loop before Kitchen: **`just lint && just yamllint && just spec`**.
 | Test Kitchen + InSpec | **Local only** (Docker socket + dokken) | `./run.sh kitchen verify` |
 
 Workflow file: **[`.github/workflows/chef.yml`](../../.github/workflows/chef.yml)**  
-Kitchen is not run in CI because it needs DinD or a privileged runner; use
-`just verify` or `./run.sh kitchen verify` on your workstation.
+It runs on pushes and pull requests that touch `test-env/chef/**`, and on pushes
+to `master` / `dev`. Kitchen is not run in CI because it needs DinD or a
+privileged runner; use `just verify` or `./run.sh kitchen verify` on your
+workstation.
 
 ---
 
