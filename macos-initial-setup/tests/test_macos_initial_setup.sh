@@ -103,6 +103,66 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   fi
 fi
 
+# --- new skip flags must all parse cleanly (exit 2 on Linux, not exit 3) ---
+if [[ "$(uname -s)" == "Linux" ]]; then
+  for flag in --skip-mas --skip-pipx --skip-rustup --skip-mise --skip-vscode \
+              --skip-snapshots --skip-launchagents --quicklook-reset \
+              --brewfile-snapshot --refresh-updates --force --summary-only --json; do
+    set +e
+    out="$("$M/stay_fresh.sh" "$flag" --dry-run 2>&1)"; rc=$?
+    set -e
+    if [[ "$rc" -eq 2 ]]; then
+      ok "stay_fresh.sh $flag parsed (exit 2)"
+    else
+      err "stay_fresh.sh $flag: expected exit 2, got $rc"
+    fi
+  done
+fi
+
+# --- --print-config / --history short-circuit before preflight (exit 0) ---
+if "$M/stay_fresh.sh" --print-config >/dev/null 2>&1; then
+  ok "stay_fresh.sh --print-config -> exit 0"
+else
+  err "stay_fresh.sh --print-config: non-zero exit"
+fi
+if "$M/stay_fresh.sh" --history >/dev/null 2>&1; then
+  ok "stay_fresh.sh --history -> exit 0"
+else
+  err "stay_fresh.sh --history: non-zero exit"
+fi
+
+# --- --only validation: unknown step -> exit 3 (CLI error) ---
+set +e
+out_only_bad="$("$M/stay_fresh.sh" --only definitely-not-a-step 2>&1)"; rc_only_bad=$?
+set -e
+if [[ "$rc_only_bad" -eq 3 ]]; then
+  ok "stay_fresh.sh --only <bogus> -> exit 3"
+else
+  err "stay_fresh.sh --only <bogus>: expected exit 3, got $rc_only_bad"
+fi
+
+# --- --only with valid keys must parse (exit 2 on Linux preflight) ---
+if [[ "$(uname -s)" == "Linux" ]]; then
+  set +e
+  out_only_ok="$("$M/stay_fresh.sh" --only memory,dns --dry-run 2>&1)"; rc_only_ok=$?
+  set -e
+  if [[ "$rc_only_ok" -eq 2 ]]; then
+    ok "stay_fresh.sh --only memory,dns parsed (exit 2)"
+  else
+    err "stay_fresh.sh --only memory,dns: expected exit 2, got $rc_only_ok"
+  fi
+fi
+
+# --- conflicting flags caught up front: --install-updates + --skip-updates -> exit 3 ---
+set +e
+out_conf="$("$M/stay_fresh.sh" --install-updates --skip-updates 2>&1)"; rc_conf=$?
+set -e
+if [[ "$rc_conf" -eq 3 ]]; then
+  ok "stay_fresh.sh conflicting --install-updates/--skip-updates -> exit 3"
+else
+  err "stay_fresh.sh conflicting flags: expected exit 3, got $rc_conf"
+fi
+
 # --- zsh_aliases: must source cleanly in zsh (Linux) ---
 if zsh -f -c "source '$M/zsh_aliases.zsh'"; then
   ok "zsh: source zsh_aliases.zsh"

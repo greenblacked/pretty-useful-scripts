@@ -7,8 +7,11 @@ This folder is the macOS setup package inside the broader helper-scripts
 repository. It turns the normal "fresh Mac checklist" — install apps, wire
 up language toolchains, keep caches and Homebrew under control — into a set
 of small, composable scripts that are safe to run today, next month, and on
-the next machine. Every change is previewable with `--dry-run`, logged to
-`$TMPDIR`, and opt-out at a per-feature level.
+the next machine. Every change is previewable with `--dry-run`, written to a
+log in `$TMPDIR` while running, and opt-out at a per-feature level.
+`stay_fresh.sh` discards its log on a clean run and only persists it
+(`~/Library/Logs/stay_fresh/`, keeping the 10 most recent) when a step warns
+or fails.
 
 **Platform:** macOS 12+ (Monterey through the current release) on Apple
 Silicon and Intel. **Shell:** `bash` for scripts (`#!/usr/bin/env bash`),
@@ -91,9 +94,10 @@ code looks the way it does.
 | **Idempotent** | Re-running a script upgrades in place. No duplicate installs, no appended shell-rc blocks, no runaway cache. |
 | **Fail-soft** | One failing step never aborts the rest of the run. Missing tools are skipped with a note, not treated as errors. |
 | **Dry-run first** | `--dry-run` is supported on every script that mutates state (except the explicitly minimal `v1_stay_fresh.sh`). No `sudo` prompt is triggered in dry-run. |
-| **Logged** | Every non-trivial script writes a timestamped log to `$TMPDIR`. `--verbose` also streams to the terminal. |
+| **Logged** | Every non-trivial script writes a timestamped log to `$TMPDIR` (`stay_fresh.sh` rescues it to `~/Library/Logs/stay_fresh/` on warn/fail, and discards it on a clean run). `--verbose` also streams to the terminal. |
 | **No hidden writes** | Shell rc files are modified only when you pass `--setup-shell`. Every such block is bracketed by markers so it can be found and removed. |
-| **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
+| **Opt-out, not opt-in** | `stay_fresh.sh` has a skip flag for every step, plus a positive `--only k1,k2,...` for when you want just one or two. Defaults can be parked in `~/.config/stay_fresh/config`. `install_apps.sh` honors `--only`/`--skip` for casks, `--skip-cli-ops` / `--skip-formulae` for CLI brew packages, and gcloud component flags. |
+| **Concurrency-safe** | `stay_fresh.sh` holds a PID lock file for the duration of the run and bails with exit 4 if a second invocation tries to start. Run history (with disk freed and step counts) is appended to `~/Library/Logs/stay_fresh/history.csv` for trend tracking. |
 | **Sudo only when needed** | Scripts request `sudo` once at startup, keep it warm for the run, and release it on exit. Running as `root` is refused. |
 
 ## Requirements
@@ -323,7 +327,9 @@ your shell configuration yourself.
 
 End-to-end macOS housekeeping. Each step is independent, measures the
 disk space freed, and degrades gracefully when a tool is missing or a
-path is protected by System Integrity Protection.
+path is protected by System Integrity Protection. Concurrent runs are
+prevented by a PID lock file in `$TMPDIR`; SIGINT/SIGTERM finish the
+current step and print a partial summary.
 
 ### Steps
 
@@ -334,25 +340,70 @@ Execution order matches the script (`run_or_skip`):
 3. Clear system caches (`/Library/Caches` and writable entries under
    `/System/Library/Caches`).
 4. Clear user caches (`~/Library/Caches`, Logs, Saved State, Xcode
-   DerivedData, and related paths).
+   DerivedData, and related paths). Prints the **top 5 cache offenders**
+   first so you see which app is responsible for the reclaimed bytes.
 5. Empty `~/.Trash`.
 6. Prune Docker / OrbStack (containers, networks, volumes, builder
    cache, and **dangling images only** — tagged images are kept).
 7. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
 8. Remove diagnostic and crash reports (user and system).
-9. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
-   `autoremove`.
-10. Check for **macOS software updates** (`softwareupdate --list`). Pending
-    updates are printed and counted as a **warning** until you opt in with
-    `--install-updates`, which runs `softwareupdate --install --all` (may show a
-    GUI authentication dialog; some updates require a reboot when marked
-    `Restart: YES`).
-11. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
+9. **Brewfile snapshot** (opt-in via `--brewfile-snapshot`): writes
+   `brew bundle dump` to `~/.Brewfile.YYYYMMDD` so an accidental
+   `brew autoremove` is recoverable with `brew bundle --file=...`.
+10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
+    `autoremove`.
+11. Check for **macOS software updates** (`softwareupdate --list`). The
+    result is **cached for 6 hours** (`--refresh-updates` to bypass).
+    Pending updates render as a compact table (title, version, size, and
+    a `↺ restart` badge for updates that require a reboot) and count as a
+    **warning** until you opt in with `--install-updates`, which runs
+    `softwareupdate --install --all` (may show a GUI authentication
+    dialog; some updates require a reboot when marked `Restart: YES`).
+
+    Sample output when updates are pending:
+
+    ```text
+    ==> macOS software update
+    [info] checking for macOS software updates (network call, may be slow)...
+      Pending updates (2):
+          TITLE                                         VERSION       SIZE       RESTART
+      •   macOS Sonoma 14.7.5                           14.7.5        3.67G      ↺ restart
+      •   Command Line Tools for Xcode                  16.3          690.0M
+    [warn] one or more updates require a restart
+    [info] pass --install-updates to apply these updates
+    ```
+12. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
     `go`, `cargo`).
-12. Update installed Helm plugins.
-13. Run `gcloud components update`.
-14. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
-    and `gcloud`.
+13. **App Store** updates via `mas` (`mas upgrade`).
+14. **`pipx upgrade-all`** for pipx-installed CLIs.
+15. **`rustup self update` + `rustup update stable`**.
+16. **`mise` / `asdf` self-update** (does not change installed language versions).
+17. **VSCode / Cursor / VSCodium extension updates** (`<editor> --update-extensions`).
+18. Update installed Helm plugins.
+19. Run `gcloud components update`.
+20. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`, `gcloud`.
+21. **Thin Time Machine local snapshots** with `tmutil` when free space
+    on `/` is below 15 GiB. Otherwise a no-op (snapshots are left alone).
+22. **Audit `~/Library/LaunchAgents`** for plists whose target binary is
+    missing. Reports orphans; never deletes anything.
+23. **Quick Look + Finder reset** (opt-in via `--quicklook-reset`):
+    `qlmanage -r` + `qlmanage -r cache` + `killall Finder`.
+
+Every dev-tool step (mas, pipx, rustup, mise, vscode, helm-plugins,
+gcloud) auto-skips silently when its CLI is not installed.
+
+### Preflight refusals
+
+Some failure modes are bad enough that the script refuses the offending
+step (typically `brew`) rather than risking damage. All of these are
+recoverable with `--force`:
+
+| Refusal | Reason |
+| --- | --- |
+| Disk-tight (`<` 2 GiB free on `/`) | Homebrew upgrades on a near-full disk routinely corrupt their own cache. |
+| CLT major mismatch (e.g. CLT 15 on macOS 14) | Homebrew CLT-dependent builds reliably fail here. |
+| Apple-Silicon Mac with `brew` at `/usr/local` (Rosetta) | Creates a stale `/usr/local/bin` shadow that's easy to install onto and hard to remove. |
+| Low battery, on battery power (`<` 50%) | Long upgrades risk a mid-run shutdown — warning only, run continues. |
 
 ### Usage
 
@@ -362,37 +413,79 @@ Execution order matches the script (`run_or_skip`):
 ./stay_fresh.sh --yes --verbose   # non-interactive; stream output live
 ./stay_fresh.sh --brew-greedy     # also upgrade :latest / auto_updates casks
 ./stay_fresh.sh --no-sudo         # skip every step that requires sudo
-./stay_fresh.sh --skip-devtools   # skip all dev-tool refresh steps at once
-./stay_fresh.sh --skip-updates    # skip the macOS software update check
-./stay_fresh.sh --install-updates # apply pending macOS updates (see Options)
+./stay_fresh.sh --only memory,dns,trash         # run just three steps
+./stay_fresh.sh --skip-devtools --skip-docker   # mix-and-match exclusions
+./stay_fresh.sh --install-updates --brewfile-snapshot
+./stay_fresh.sh --summary-only --yes --json     # cron-friendly, machine-readable
+./stay_fresh.sh --history                       # show the run-history table
+./stay_fresh.sh --print-config                  # show parsed config + flag state
 ```
 
 ### Options
 
 | Flag | Purpose |
 | --- | --- |
+| **General** | |
 | `--dry-run` | Show the plan; change nothing. |
 | `-y`, `--yes` | Skip confirmation prompts. |
 | `-v`, `--verbose` | Stream per-step output live. |
+| `--summary-only` | Suppress per-step output; print only the summary card. |
+| `--json` | Append a JSON summary after the human card. |
 | `--no-sudo` | Skip `purge`, DNS flush, system caches, and system diagnostics. |
-| `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
-| `--skip-devtools` | Shorthand for `--skip-helm-plugins --skip-gcloud --skip-versions`. |
+| `--no-notify` | Don't post a macOS notification at end of run. |
+| `--force` | Bypass non-critical preflight refusals (disk, battery, CLT, Rosetta). |
+| `--history` | Show the run-history table and exit. |
+| `--print-config` | Print parsed config and final flag values, then exit. |
+| `-h`, `--help` | Show the built-in help. |
+| **Step selection** | |
+| `--only k1,k2,...` | Run only the listed step keys. Negates all `--skip-*`. |
 | `--skip-memory` | Skip the `sudo purge` step. |
 | `--skip-dns` | Skip the DNS cache flush. |
 | `--skip-syscaches` | Skip system-cache cleanup. |
 | `--skip-usercaches` | Skip user-cache cleanup. |
 | `--skip-trash` | Skip emptying `~/.Trash`. |
-| `--skip-brew` | Skip Homebrew update/upgrade/cleanup. |
-| `--skip-updates` | Skip the macOS software update step (`softwareupdate`). |
-| `--install-updates` | After listing updates, run `softwareupdate --install --all` instead of stopping with a warning. May prompt for authentication; reboot if an update requires it. |
-| `--skip-devcaches` | Skip `npm`/`yarn`/`pnpm`/`pip`/`gem`/`go`/`cargo` cache cleanup. |
 | `--skip-docker` | Skip Docker / OrbStack prune. |
 | `--skip-xcode` | Skip Xcode extras cleanup. |
 | `--skip-diagnostics` | Skip diagnostic and crash-report cleanup. |
+| `--skip-brew` | Skip Homebrew update/upgrade/cleanup. |
+| `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
+| `--brewfile-snapshot` | Dump `brew bundle` to `~/.Brewfile.YYYYMMDD` before brew runs. |
+| `--skip-updates` | Skip the macOS software update step. |
+| `--install-updates` | Run `softwareupdate --install --all` instead of just listing. |
+| `--refresh-updates` | Bypass the 6 h `softwareupdate --list` cache. |
+| `--skip-devcaches` | Skip `npm`/`yarn`/`pnpm`/`pip`/`gem`/`go`/`cargo` cache cleanup. |
+| `--skip-mas` | Skip App Store updates (`mas`). |
+| `--skip-pipx` | Skip `pipx upgrade-all`. |
+| `--skip-rustup` | Skip `rustup update`. |
+| `--skip-mise` | Skip `mise` / `asdf` self-update. |
+| `--skip-vscode` | Skip `code`/`cursor`/`codium` extension updates. |
 | `--skip-helm-plugins` | Skip Helm plugin updates. |
 | `--skip-gcloud` | Skip `gcloud components update`. |
 | `--skip-versions` | Skip the final version report. |
-| `-h`, `--help` | Show the built-in help. |
+| `--skip-devtools` | Shorthand: skip all dev-tool refreshes (helm-plugins, gcloud, versions, mas, pipx, rustup, mise, vscode). |
+| `--skip-snapshots` | Don't trim Time Machine local snapshots when disk is tight. |
+| `--skip-launchagents` | Don't audit `~/Library/LaunchAgents` for orphans. |
+| `--quicklook-reset` | Reset Quick Look + Finder caches (cosmetic, opt-in). |
+
+Valid keys for `--only`: `memory`, `dns`, `syscaches`, `usercaches`, `trash`,
+`docker`, `xcode`, `diagnostics`, `brew`, `brewfile-snapshot`, `updates`,
+`devcaches`, `mas`, `pipx`, `rustup`, `mise`, `vscode`, `helm-plugins`,
+`gcloud`, `versions`, `snapshots`, `launchagents`, `quicklook`.
+
+### Config file
+
+Persistent defaults live in `$XDG_CONFIG_HOME/stay_fresh/config` (falls
+back to `~/.config/stay_fresh/config`). The file is plain `KEY=value`,
+sourced before flag parsing — anything you can set as a flag you can set
+there. Run `./stay_fresh.sh --print-config` to see the parsed result.
+
+```bash
+# ~/.config/stay_fresh/config — example
+SKIP_DOCKER=1            # this machine has no Docker
+SKIP_XCODE=1             # not an iOS dev
+BREW_GREEDY=1            # always upgrade :latest casks
+LOW_BATTERY_THRESHOLD=30 # I trust this MacBook's battery, lower the warn floor
+```
 
 ### Output
 
@@ -403,7 +496,28 @@ accounting, and closes with a summary that includes:
 - `df` delta on `/`.
 - Sum of per-step deltas (more precise than `df` alone).
 - Which steps passed, warned, were skipped, or failed.
-- Path to the full log file.
+- Path to the full log file (only when warnings or failures occurred).
+
+A **last-run banner** at startup shows the most recent row from
+`history.csv` (status, when, disk freed, step counts) so you see
+continuity across runs without typing `--history`.
+
+A **macOS notification** is posted at the end of every run (success,
+warning, or failure) so long runs you tabbed away from still ping you.
+Use `--no-notify` to silence.
+
+### Logs & history
+
+| When | Where | Why |
+| --- | --- | --- |
+| During the run | `$TMPDIR/stay_fresh-YYYYMMDD-HHMMSS.log` | Always written; captured command output goes here. |
+| Clean run | *Discarded* | Successful housekeeping leaves no log clutter behind. |
+| Warning / failure | `~/Library/Logs/stay_fresh/stay_fresh-YYYYMMDD-HHMMSS.log` | Rescued so you can `tail` it later. The 10 most recent files are kept; older ones are rotated out. |
+| Every completed run | `~/Library/Logs/stay_fresh/history.csv` | One row per run: timestamp, elapsed, freed bytes, OK/WARN/FAIL/SKIP counts, exit code. |
+| softwareupdate cache | `$TMPDIR/stay_fresh-swu-cache` | Last `softwareupdate --list` output. TTL 6 h. `--refresh-updates` bypasses. |
+
+`./stay_fresh.sh --history` prints the most recent 15 rows formatted as
+a table.
 
 ### Exit codes
 
@@ -413,6 +527,7 @@ accounting, and closes with a summary that includes:
 | `1` | One or more steps hard-failed. |
 | `2` | Preflight checks failed. |
 | `3` | Invalid arguments. |
+| `4` | Another `stay_fresh.sh` is already running (PID lock in `$TMPDIR`). |
 
 ---
 
@@ -550,7 +665,10 @@ and `zsh`, mounts the repo read-only at `/repo`, and runs
 | ShellCheck | `--severity=error` for the bash scripts. Debian’s stock ShellCheck may not ship a `zsh` dialect — the harness then **skips** `zsh` ShellCheck but still **sources** `zsh_aliases.zsh` in `zsh`. |
 | CLI | `--help` succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`; an unknown `install_apps.sh` flag returns exit **3** (before preflight). |
 | Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` — preflight always runs first. |
-| `stay_fresh.sh --skip-updates` | On Linux, `--skip-updates --dry-run` must exit **2** (known flag), not **3** (unknown option), so new skip flags are covered by CI. |
+| `stay_fresh.sh --skip-updates` and other new skip flags | On Linux, each new skip flag (`--skip-mas`, `--skip-pipx`, `--skip-rustup`, `--skip-mise`, `--skip-vscode`, `--skip-snapshots`, `--skip-launchagents`, `--quicklook-reset`, `--brewfile-snapshot`, `--refresh-updates`, `--force`, `--summary-only`, `--json`) must exit **2** (known flag), not **3** (unknown option). |
+| `stay_fresh.sh --print-config` / `--history` | Must exit **0** even on Linux — both short-circuit before the macOS preflight. |
+| `stay_fresh.sh --only <bogus>` | Must exit **3**. `--only memory,dns` on Linux must exit **2**. |
+| Conflicting flags | `--install-updates --skip-updates` must exit **3** at parse time. |
 | `zsh_aliases.zsh` | `zsh -f -c "source …"` must not error. |
 
 This is **not** a substitute for `--dry-run` on a real Mac: there is no
@@ -614,9 +732,28 @@ Homebrew / `pyenv` / `goenv` commands.
 - Upgrades Homebrew formulae and casks (greedy upgrade only with
   `--brew-greedy`).
 - Calls `softwareupdate --list` (and optionally `softwareupdate --install --all`
-  with `--install-updates`); skip entirely with `--skip-updates`.
+  with `--install-updates`); skip entirely with `--skip-updates`. The list
+  output is cached in `$TMPDIR/stay_fresh-swu-cache` for 6 h.
 - Updates Helm plugins and `gcloud` components when those tools are installed.
-- Writes `/tmp/stay_fresh-YYYYMMDD-HHMMSS.log`.
+- Runs **App Store** (`mas`), **pipx**, **rustup**, **mise/asdf**, and
+  **VSCode/Cursor extension** updates when those CLIs are on `PATH`.
+- **Reads** `~/Library/LaunchAgents` to audit for orphan plists. Never
+  deletes anything in this directory.
+- **Thins** Time Machine local snapshots (`tmutil thinlocalsnapshots /`)
+  when `/` has less than 15 GiB free.
+- Optionally resets Quick Look + Finder caches (`--quicklook-reset`).
+- Optionally writes a Brewfile snapshot to `~/.Brewfile.YYYYMMDD` before
+  the Homebrew step (`--brewfile-snapshot`).
+- Writes a run log in `$TMPDIR`. On a clean run the log is deleted; if any
+  step warns or fails, the log is moved to
+  `~/Library/Logs/stay_fresh/` (most recent 10 kept, older rotated out).
+- Appends one row to `~/Library/Logs/stay_fresh/history.csv` per
+  completed run.
+- Holds a PID lock file (`$TMPDIR/stay_fresh.lock`) for the duration of
+  the run to prevent concurrent invocations.
+- Reads (but does not write) `$XDG_CONFIG_HOME/stay_fresh/config` for
+  persistent defaults.
+- Posts a macOS notification at end of run unless `--no-notify` is set.
 - Does **not** modify any shell configuration files.
 
 ### `v1_stay_fresh.sh`
