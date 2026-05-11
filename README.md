@@ -114,6 +114,14 @@ repositories and local bare remotes:
   branch; protects common branch names unless `--force` is passed.
 - `git_recent_branches.sh` — lists local branches by recent activity and can
   switch by list index.
+- `git_repo_root.sh` — prints the repository root path for the current Git
+  working tree.
+- `git_diff_branch.sh` — shows the diff or diffstat for changes unique to the
+  current branch since it diverged from `main` or `master`.
+- `git_undo_last_commit.sh` — undoes the latest commit with `--soft` by
+  default, with explicit options for `--mixed` and forced `--hard`.
+- `git_amend_last.sh` — amends the previous commit with staged changes, or
+  stages everything first with `--add-all`.
 
 See [`git/README.md`](git/README.md) for command examples, exit-code
 conventions, alias setup, and Docker test details.

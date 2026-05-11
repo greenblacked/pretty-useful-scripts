@@ -9,8 +9,8 @@
 #   - clean developer tool caches (npm, yarn, pnpm, pip, gem, go)
 #   - prune Docker / OrbStack (images, containers, volumes, builder cache)
 #   - clean Xcode extras (Archives, DeviceSupport, stale simulators)
-#   - clean diagnostic / crash reports (user + system)
-#   - update & upgrade Homebrew (formulae + casks) and clean up
+#   - clean diagnostic / crash reports (as user; system dirs if sudo)
+#   - Homebrew: update, upgrade (formulae + casks), cleanup -s, autoremove
 #   - refresh dev toolchains (helm plugins, gcloud components) installed by
 #     install_apps.sh / install_devtools.sh
 #
@@ -116,7 +116,7 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
   --skip-syscaches       Don't touch /Library/Caches or /System/Library/Caches
   --skip-usercaches      Don't clear ~/Library/Caches et al.
   --skip-trash           Don't empty ~/.Trash
-  --skip-brew            Don't run 'brew update/upgrade/cleanup'
+  --skip-brew            Don't run Homebrew maintenance (see Notes)
   --brew-greedy          Also upgrade casks with 'auto_updates true' / 'version :latest'
                          (may prompt for sudo during cask postinstalls)
   --skip-devcaches       Don't clean npm/yarn/pnpm/pip/gem/go caches
@@ -128,7 +128,17 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
                          versions
   --skip-docker          Don't prune Docker / OrbStack
   --skip-xcode           Don't clean Xcode Archives/DeviceSupport/simulators
-  --skip-diagnostics     Don't remove crash / diagnostic reports
+  --skip-diagnostics     Don't remove crash / diagnostic reports (see Notes)
+
+${C_BOLD}Notes:${C_RESET}
+  Diagnostic / crash reports: always runs as your user (clears
+  ~/Library/Logs/DiagnosticReports and ~/Library/DiagnosticReports). With sudo
+  (default), also clears /Library/Logs/DiagnosticReports and
+  /Library/Logs/CrashReporter. --no-sudo skips only those system paths.
+
+  Homebrew: runs brew update; brew upgrade (formulae, then casks); brew cleanup -s;
+  brew autoremove; brew doctor only when --verbose. Casks may prompt for sudo during
+  postinstall (--brew-greedy changes which casks upgrade).
 
 Log file: $LOG_FILE
 EOF
@@ -432,7 +442,7 @@ plan_line "empty trash"                       "$(( 1 - SKIP_TRASH       ))" "~/.
 plan_line "docker / orbstack prune"           "$(( 1 - SKIP_DOCKER      ))" "images, containers, volumes, builder"
 plan_line "xcode extras"                      "$(( 1 - SKIP_XCODE       ))" "Archives, DeviceSupport, simulators"
 plan_line "diagnostic / crash reports"        "$(( 1 - SKIP_DIAGNOSTICS ))" "user (+ system if sudo)"
-plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))"
+plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))" "brew update · upgrade · cleanup -s · autoremove"
 plan_line "dev-tool caches"                   "$(( 1 - SKIP_DEVCACHES   ))" "npm/yarn/pnpm/pip/gem/go"
 plan_line "helm plugin refresh"               "$(( 1 - SKIP_HELM_PLUGINS))" "helm plugin update <name>"
 plan_line "gcloud components update"          "$(( 1 - SKIP_GCLOUD      ))" "non-brew gcloud components"
@@ -948,7 +958,24 @@ print_group() {
 (( ${#STEPS_FAIL[@]} > 0 )) && print_group "Failed"  "$C_RED"    "${STEPS_FAIL[@]}"
 
 echo
-info "full log: $LOG_FILE"
+if (( ${#STEPS_FAIL[@]} > 0 || ${#STEPS_WARN[@]} > 0 )); then
+  PERSISTENT_LOG_DIR="$HOME/Library/Logs/stay_fresh"
+  mkdir -p "$PERSISTENT_LOG_DIR"
+  SAVED_LOG="$PERSISTENT_LOG_DIR/$(basename "$LOG_FILE")"
+  if cp "$LOG_FILE" "$SAVED_LOG" 2>/dev/null; then
+    rm -f "$LOG_FILE"
+  else
+    SAVED_LOG="$LOG_FILE"
+  fi
+  # keep only the 10 most recent logs
+  find "$PERSISTENT_LOG_DIR" -name 'stay_fresh-*.log' -type f \
+    | sort -r | tail -n +11 | xargs rm -f 2>/dev/null || true
+  warn "log saved: $SAVED_LOG"
+  printf "  %sTo inspect:%s tail -80 '%s'\n" "$C_DIM" "$C_RESET" "$SAVED_LOG"
+else
+  rm -f "$LOG_FILE"
+  info "run clean — log discarded"
+fi
 
 if (( ${#STEPS_FAIL[@]} > 0 )); then
   exit 1
