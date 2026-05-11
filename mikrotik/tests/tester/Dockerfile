@@ -10,7 +10,7 @@ COPY requirements.txt /opt/tester/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /opt/tester/entrypoint.sh
+COPY tester/entrypoint.sh /opt/tester/entrypoint.sh
 RUN chmod +x /opt/tester/entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1

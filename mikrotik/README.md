@@ -11,16 +11,21 @@ live in `/system script` on the router and are run either manually or from
 
 ## Files at a glance
 
-| File                       | Purpose                                                                 |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `tg_send.lua`              | Generic Telegram text-message helper used by every other script.        |
-| `backup.lua`               | Daily binary + export backup with Telegram confirmation.                |
-| `change_WIFI_pw.lua`       | Rotates 2.4 GHz / 5 GHz WPA2 PSK and announces it via Telegram.          |
-| `health_check.lua`         | CPU / RAM / disk / temperature watchdog with threshold alerts.          |
-| `update_check.lua`         | Notifies once when a newer RouterOS version appears on your channel.    |
-| `wan_failover_notify.lua`  | One-shot Telegram alert on built-in WAN-detect state transitions.       |
-| `detect_internet.lua`      | Re-runs RouterOS WAN/LAN auto-detection (manual reset).                 |
-| `reboot-and-flush.lua`     | Flushes DNS + connection tracking, then reboots. No pre-reboot ping.    |
+| File                            | Purpose                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `tg_send.lua`                   | Generic Telegram text-message helper used by every other script.        |
+| `backup.lua`                    | Daily binary + export backup with Telegram confirmation.                |
+| `change_WIFI_pw.lua`            | Rotates 2.4 GHz / 5 GHz WPA2 PSK and announces it via Telegram.          |
+| `health_check.lua`              | CPU / RAM / disk / temperature watchdog with threshold alerts.          |
+| `update_check.lua`              | Notifies once when a newer RouterOS version appears on your channel.    |
+| `wan_failover_notify.lua`       | One-shot Telegram alert on built-in WAN-detect state transitions.       |
+| `detect_internet.lua`           | Re-runs RouterOS WAN/LAN auto-detection (manual reset).                 |
+| `reboot-and-flush.lua`          | Flushes DNS + connection tracking, then reboots. No pre-reboot ping.    |
+| `dhcp_lease_watch.lua`          | Alerts on new MACs, duplicate hostnames, and lease churn.               |
+| `firewall_drift.lua`            | Diffs current firewall rules against a saved baseline; alerts on drift. |
+| `firewall_drift_baseline.lua`   | Manual helper that re-arms `firewall_drift` after intentional changes.  |
+| `mac_allowlist_dhcp.lua`        | Flags (and optionally blocks) DHCP leases for non-allowlisted MACs.     |
+| `rogue_dns_check.lua`           | Detects DNS upstream hijack and clients using non-approved resolvers.   |
 
 ## Installation
 
@@ -60,10 +65,14 @@ Add via **System → Scheduler** (use the same policy set as the scripts):
 | `health_check`        | `5m`                       |
 | `update_check`        | `1d`                       |
 | `wan_failover_notify` | `1m`                       |
+| `dhcp_lease_watch`    | `5m`                       |
+| `firewall_drift`      | `15m`                      |
+| `mac_allowlist_dhcp`  | `5m`                       |
+| `rogue_dns_check`     | `10m`                      |
 | `notify-boot` (inline)| `start-time=startup` — see [Reboot notifications](#reboot-notifications) |
 
-`detect_internet` and `reboot-and-flush` are intentionally manual / on-demand —
-don't schedule them.
+`detect_internet`, `reboot-and-flush`, and `firewall_drift_baseline` are
+intentionally manual / on-demand — don't schedule them.
 
 ### Reboot notifications
 
@@ -145,6 +154,96 @@ Requires detect-internet to be enabled on the interface — run
 Edit `WanInterface` at the top of the script if your WAN port isn't
 `ether1`.
 
+### `dhcp_lease_watch.lua`
+Periodically scans `/ip dhcp-server lease` and alerts on three conditions:
+new MACs not seen before (relative to `:global DHCP_KNOWN_MACS`), the same
+hostname showing up under multiple MACs, and lease-count churn beyond
+`ChurnThreshold` (default 10) since the previous run. The first run after
+boot silently establishes the baseline. With `Enforce=true` (default), each
+new MAC's lease IP is added to address-list `dhcp-watch-new` with a 1-day
+timeout so you can pin a forward rule to it. Sticky `:global DHCP_DUPS_FLAG`
+and `DHCP_CHURN_FLAG` suppress repeat alerts while the same condition
+persists.
+
+### `firewall_drift.lua`
+Stores a signature string of every `/ip firewall filter` and `/ip firewall
+nat` rule (`chain|action|src-address|dst-port|protocol|comment`) in
+`:global FW_BASELINE` on first run, then alerts when later runs see
+additions, removals, or a different ordering of rules whose comment contains
+`#critical`. On drift the script also logs a marker entry into address-list
+`fw-drift-events` (sentinel address `127.0.0.1`, 1-hour timeout) so the
+router carries a router-side audit trail. Run `firewall_drift_baseline.lua`
+after intentional firewall changes to clear the global; the next
+`firewall_drift` run silently re-baselines.
+
+### `firewall_drift_baseline.lua`
+Manual helper. Sets `:global FW_BASELINE` to empty string. Does not touch
+firewall rules. Run after intentional firewall edits before the next
+scheduled `firewall_drift` run, otherwise the change will be reported as
+drift.
+
+### `mac_allowlist_dhcp.lua`
+Iterates `/ip dhcp-server lease` and flags any lease whose MAC is not on the
+allowlist. The allowlist comes from `:global MAC_ALLOWLIST` (delimited
+string, e.g. `";aa:bb:..;cc:dd:..;"`) or from a per-lease comment containing
+the literal substring `#allow`. With `Enforce=true` (default), unknown lease
+IPs are tagged into address-list `dhcp-unknown` with a 1-day timeout. With
+`BlockUnknown=true` (off by default), the script idempotently installs a
+single `chain=forward action=drop` rule sourced from that list (the rule is
+appended at the end of `/ip firewall filter` — review and move it manually
+to the right position). Refuses to do anything if `MAC_ALLOWLIST` is empty,
+to avoid accidentally locking every device out of an unconfigured router.
+Re-alerts only when the set of unknown MACs changes between runs.
+
+### `rogue_dns_check.lua`
+Two checks per run. First, it `:resolve`s a control hostname (default
+`dns.cloudflare.com`) and warns if the answer is not in `:global
+DNS_EXPECTED` — a sign of upstream DNS hijack or a wrong/leaking resolver
+config. Second, it walks `/ip firewall connection` for outbound
+UDP/TCP `dst-port=53` flows whose destination is neither a router-self IP
+nor an entry in `:global DNS_ALLOWED_RESOLVERS`, aggregates offenders by
+source IP, and (with `Enforce=true`, default) tags those source IPs into
+address-list `rogue-dns-clients` with a 1-hour timeout. Pair with a
+documented filter rule to redirect or drop their port-53 traffic (see
+[Security action surface](#security-action-surface) below).
+
+## Security action surface
+
+The four security scripts above keep their actions on a small, reversible
+surface so a noisy detector cannot brick the router:
+
+| Address-list          | Populated by              | Purpose                                                |
+| --------------------- | ------------------------- | ------------------------------------------------------ |
+| `dhcp-watch-new`      | `dhcp_lease_watch`        | New DHCP lease IPs (informational; tag for ad-hoc rules). |
+| `dhcp-unknown`        | `mac_allowlist_dhcp`      | DHCP lease IPs whose MAC is not on the allowlist.      |
+| `fw-drift-events`     | `firewall_drift`          | Sentinel marker `127.0.0.1` per drift event (audit trail). |
+| `rogue-dns-clients`   | `rogue_dns_check`         | Source IPs caught using non-approved DNS resolvers.    |
+
+Optional filter rule templates (commented out on purpose — review first,
+then apply if you want enforcement). All of them assume the lists above are
+populated by the corresponding scheduled scripts:
+
+```routeros
+# Drop traffic from devices not on the MAC allowlist (mac_allowlist_dhcp).
+/ip firewall filter add chain=forward action=drop \
+    src-address-list=dhcp-unknown comment=mac-allowlist-block disabled=yes
+
+# Redirect port-53 traffic from rogue clients to the router itself
+# (rogue_dns_check). NAT entries that match are then DNAT'd onto 192.0.2.1.
+/ip firewall nat add chain=dstnat action=dst-nat to-addresses=192.0.2.1 \
+    protocol=udp dst-port=53 src-address-list=rogue-dns-clients \
+    comment=rogue-dns-redirect disabled=yes
+
+# Quarantine new DHCP devices from talking to the LAN until you
+# acknowledge them (dhcp_lease_watch with Enforce=true).
+/ip firewall filter add chain=forward action=drop \
+    src-address-list=dhcp-watch-new comment=dhcp-watch-quarantine disabled=yes
+```
+
+To re-baseline the firewall drift detector after an intentional change,
+either run `/system script run firewall_drift_baseline` from the terminal or
+schedule it manually before applying the change.
+
 ## Docker integration tests (CHR 7.22)
 
 To validate all scripts on **real RouterOS 7.22** inside Docker (QEMU + official CHR
@@ -152,6 +251,10 @@ image), use [`tests/README.md`](tests/README.md) and from the repo root run
 `./mikrotik/tests/run.sh`. This is the closest practical “emulation” of your router:
 MikroTik does not ship a standalone script interpreter, so the tests talk to a live
 CH instance over the API.
+
+The macOS setup scripts in this repo have a **separate** lightweight Docker
+harness (syntax + ShellCheck only, no Homebrew) — see
+[`macos-initial-setup/README.md`](../macos-initial-setup/README.md#development--docker-checks).
 
 ## RouterOS 7.22 notes & gotchas
 

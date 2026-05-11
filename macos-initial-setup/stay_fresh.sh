@@ -9,10 +9,10 @@
 #   - clean developer tool caches (npm, yarn, pnpm, pip, gem, go)
 #   - prune Docker / OrbStack (images, containers, volumes, builder cache)
 #   - clean Xcode extras (Archives, DeviceSupport, stale simulators)
-#   - clean diagnostic / crash reports (user + system)
-#   - update & upgrade Homebrew (formulae + casks) and clean up
-#   - refresh dev toolchains (helm plugins, mise tools + plugins,
-#     gcloud components) installed by install_apps.sh / install_devtools.sh
+#   - clean diagnostic / crash reports (as user; system dirs if sudo)
+#   - Homebrew: update, upgrade (formulae + casks), cleanup -s, autoremove
+#   - refresh dev toolchains (helm plugins, gcloud components) installed by
+#     install_apps.sh / install_devtools.sh
 #
 # Usage:
 #   ./stay_fresh.sh [--dry-run] [--yes] [--verbose]
@@ -72,7 +72,6 @@ SKIP_TRASH=0
 SKIP_BREW=0
 SKIP_DEVCACHES=0
 SKIP_DEVTOOLS=0
-SKIP_MISE=0
 SKIP_HELM_PLUGINS=0
 SKIP_GCLOUD=0
 SKIP_VERSIONS=0
@@ -117,21 +116,29 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
   --skip-syscaches       Don't touch /Library/Caches or /System/Library/Caches
   --skip-usercaches      Don't clear ~/Library/Caches et al.
   --skip-trash           Don't empty ~/.Trash
-  --skip-brew            Don't run 'brew update/upgrade/cleanup'
+  --skip-brew            Don't run Homebrew maintenance (see Notes)
   --brew-greedy          Also upgrade casks with 'auto_updates true' / 'version :latest'
                          (may prompt for sudo during cask postinstalls)
   --skip-devcaches       Don't clean npm/yarn/pnpm/pip/gem/go caches
   --skip-devtools        Shorthand: skip all dev-tool refresh steps below
-                         (--skip-mise --skip-helm-plugins --skip-gcloud
-                          --skip-versions)
-  --skip-mise            Don't run 'mise self-update / plugins update / upgrade'
+                         (--skip-helm-plugins --skip-gcloud --skip-versions)
   --skip-helm-plugins    Don't run 'helm plugin update' for installed plugins
   --skip-gcloud          Don't run 'gcloud components update'
   --skip-versions        Don't print active pyenv/goenv/tfenv/tenv/helm/gcloud
                          versions
   --skip-docker          Don't prune Docker / OrbStack
   --skip-xcode           Don't clean Xcode Archives/DeviceSupport/simulators
-  --skip-diagnostics     Don't remove crash / diagnostic reports
+  --skip-diagnostics     Don't remove crash / diagnostic reports (see Notes)
+
+${C_BOLD}Notes:${C_RESET}
+  Diagnostic / crash reports: always runs as your user (clears
+  ~/Library/Logs/DiagnosticReports and ~/Library/DiagnosticReports). With sudo
+  (default), also clears /Library/Logs/DiagnosticReports and
+  /Library/Logs/CrashReporter. --no-sudo skips only those system paths.
+
+  Homebrew: runs brew update; brew upgrade (formulae, then casks); brew cleanup -s;
+  brew autoremove; brew doctor only when --verbose. Casks may prompt for sudo during
+  postinstall (--brew-greedy changes which casks upgrade).
 
 Log file: $LOG_FILE
 EOF
@@ -152,7 +159,6 @@ while (( $# > 0 )); do
     --brew-greedy)     BREW_GREEDY=1 ;;
     --skip-devcaches)  SKIP_DEVCACHES=1 ;;
     --skip-devtools)   SKIP_DEVTOOLS=1 ;;
-    --skip-mise)       SKIP_MISE=1 ;;
     --skip-helm-plugins) SKIP_HELM_PLUGINS=1 ;;
     --skip-gcloud)     SKIP_GCLOUD=1 ;;
     --skip-versions)   SKIP_VERSIONS=1 ;;
@@ -168,7 +174,6 @@ done
 # --skip-devtools is a convenience; fan it out across the individual
 # dev-tool refresh steps so the plan/summary accurately reflects what runs.
 if (( SKIP_DEVTOOLS )); then
-  SKIP_MISE=1
   SKIP_HELM_PLUGINS=1
   SKIP_GCLOUD=1
   SKIP_VERSIONS=1
@@ -188,9 +193,9 @@ human_duration() {
 human_bytes() {
   local b="$1" sign=""
   if (( b < 0 )); then sign="-"; b=$(( -b )); fi
-  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(echo "scale=2; $b/1073741824" | bc)"
-  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(echo "scale=2; $b/1048576"    | bc)"
-  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(echo "scale=2; $b/1024"       | bc)"
+  if   (( b >= 1073741824 )); then printf "%s%.2fG" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1073741824}')"
+  elif (( b >= 1048576    )); then printf "%s%.2fM" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1048576}')"
+  elif (( b >= 1024       )); then printf "%s%.2fK" "$sign" "$(awk -v b="$b" 'BEGIN{printf "%.2f", b/1024}')"
   else                            printf "%s%dB"    "$sign" "$b"
   fi
 }
@@ -330,6 +335,28 @@ if (( SKIP_BREW == 0 )); then
   fi
 fi
 
+# 4a. Xcode Command Line Tools check (Homebrew frequently depends on them).
+# We can't perfectly predict "too outdated", but we can catch missing CLT and
+# flag obvious mismatches (e.g. macOS major != CLT major).
+if (( SKIP_BREW == 0 )); then
+  if xcode-select -p >/dev/null 2>&1; then
+    clt_ver="$(pkgutil --pkg-info com.apple.pkg.CLTools_Executables 2>/dev/null | awk -F': ' '/^version:/ {print $2}' | head -n1)"
+    if [[ -n "$clt_ver" ]]; then
+      os_major="${OS_VERSION%%.*}"
+      clt_major="${clt_ver%%.*}"
+      if [[ "$os_major" != "?" ]] && [[ "$clt_major" != "?" ]] && [[ "$os_major" != "$clt_major" ]]; then
+        warn "Xcode Command Line Tools version ($clt_ver) does not match macOS major ($OS_VERSION) — brew upgrades may fail; update CLT via Software Update or 'xcode-select --install'"
+      else
+        ok "Xcode Command Line Tools: $clt_ver"
+      fi
+    else
+      ok "Xcode Command Line Tools: present"
+    fi
+  else
+    warn "Xcode Command Line Tools not detected — Homebrew upgrades may fail (install via 'xcode-select --install')"
+  fi
+fi
+
 # 4b. Docker check — auto-skip if no docker CLI
 if (( SKIP_DOCKER == 0 )); then
   if ! command -v docker >/dev/null 2>&1; then
@@ -412,12 +439,11 @@ plan_line "flush DNS cache"                   "$(( 1 - SKIP_DNS         ))" "dsc
 plan_line "clear system caches"               "$(( 1 - SKIP_SYSCACHES   ))" "/Library/Caches, /System/Library/Caches"
 plan_line "clear user caches"                 "$(( 1 - SKIP_USERCACHES  ))" "~/Library/Caches, Logs, DerivedData, ..."
 plan_line "empty trash"                       "$(( 1 - SKIP_TRASH       ))" "~/.Trash"
-plan_line "dev-tool caches"                   "$(( 1 - SKIP_DEVCACHES   ))" "npm/yarn/pnpm/pip/gem/go"
 plan_line "docker / orbstack prune"           "$(( 1 - SKIP_DOCKER      ))" "images, containers, volumes, builder"
 plan_line "xcode extras"                      "$(( 1 - SKIP_XCODE       ))" "Archives, DeviceSupport, simulators"
 plan_line "diagnostic / crash reports"        "$(( 1 - SKIP_DIAGNOSTICS ))" "user (+ system if sudo)"
-plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))"
-plan_line "mise refresh"                      "$(( 1 - SKIP_MISE        ))" "mise self-update + plugins update + upgrade"
+plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))" "brew update · upgrade · cleanup -s · autoremove"
+plan_line "dev-tool caches"                   "$(( 1 - SKIP_DEVCACHES   ))" "npm/yarn/pnpm/pip/gem/go"
 plan_line "helm plugin refresh"               "$(( 1 - SKIP_HELM_PLUGINS))" "helm plugin update <name>"
 plan_line "gcloud components update"          "$(( 1 - SKIP_GCLOUD      ))" "non-brew gcloud components"
 plan_line "report active versions"            "$(( 1 - SKIP_VERSIONS    ))" "pyenv/goenv/tfenv/tenv/helm/gcloud"
@@ -491,7 +517,10 @@ step_syscaches() {
   if [[ -d /System/Library/Caches ]]; then
     printf "  /System/Library/Caches: removing writable entries only\n"
     if (( DRY_RUN == 0 )); then
-      sudo find /System/Library/Caches -mindepth 1 -maxdepth 2 -writable -exec rm -rf {} + 2>>"$LOG_FILE" || true
+      # BSD find on macOS does not consistently support -writable; use -perm instead.
+      sudo find /System/Library/Caches -mindepth 1 -maxdepth 2 \
+        \( -perm -u+w -o -perm -g+w -o -perm -o+w \) \
+        -exec rm -rf {} + 2>>"$LOG_FILE" || true
     else
       printf "  %s(dry-run) would remove writable entries in /System/Library/Caches%s\n" "$C_DIM" "$C_RESET"
     fi
@@ -535,32 +564,70 @@ step_trash() {
 
 step_devcaches() {
   local any=0
+  local node_ok=0
+  if command -v node >/dev/null 2>&1 && node -v >/dev/null 2>&1; then
+    node_ok=1
+  fi
 
   if command -v npm >/dev/null 2>&1; then
     any=1
     local d="$HOME/.npm"
     printf "  npm cache %s(%s)%s\n" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
-    run_cmd "npm cache clean --force" npm cache clean --force || warn "'npm cache clean' failed"
+    if (( node_ok )); then
+      run_cmd "npm cache clean --force" npm cache clean --force || warn "'npm cache clean' failed"
+    else
+      warn "node is not runnable; skipping npm cache clean (try: brew reinstall node)"
+    fi
   fi
 
   if command -v yarn >/dev/null 2>&1; then
     any=1
     local d="$HOME/Library/Caches/Yarn"
     printf "  yarn cache %s(%s)%s\n" "$C_DIM" "$(human_bytes "$(path_bytes "$d")")" "$C_RESET"
-    run_cmd "yarn cache clean" yarn cache clean || warn "'yarn cache clean' failed"
+    if (( node_ok )); then
+      run_cmd "yarn cache clean" yarn cache clean || warn "'yarn cache clean' failed"
+    else
+      warn "node is not runnable; skipping yarn cache clean (try: brew reinstall node)"
+    fi
   fi
 
   if command -v pnpm >/dev/null 2>&1; then
     any=1
-    run_cmd "pnpm store prune" pnpm store prune || warn "'pnpm store prune' failed"
+    if (( node_ok )); then
+      run_cmd "pnpm store prune" pnpm store prune || warn "'pnpm store prune' failed"
+    else
+      warn "node is not runnable; skipping pnpm store prune (try: brew reinstall node)"
+    fi
   fi
 
   if command -v pip3 >/dev/null 2>&1; then
     any=1
-    run_cmd "pip3 cache purge" pip3 cache purge || warn "'pip3 cache purge' failed"
+    # pip may print "WARNING: No matching packages" even with -q; filter that noise from the
+    # terminal while keeping full output in the log.
+    if (( DRY_RUN )); then
+      run_cmd "pip3 cache purge" pip3 cache purge -q || warn "'pip3 cache purge' failed"
+    else
+      echo "# $(date '+%H:%M:%S') [pip3 cache purge] >> pip3 cache purge -q" >>"$LOG_FILE"
+      local rc=0
+      pip3 cache purge -q 2>&1 \
+        | tee -a "$LOG_FILE" \
+        | awk '!/^WARNING: No matching packages$/'
+      rc="${PIPESTATUS[0]}"
+      if (( rc != 0 )); then STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 )); fi
+    fi
   elif command -v pip >/dev/null 2>&1; then
     any=1
-    run_cmd "pip cache purge" pip cache purge || warn "'pip cache purge' failed"
+    if (( DRY_RUN )); then
+      run_cmd "pip cache purge" pip cache purge -q || warn "'pip cache purge' failed"
+    else
+      echo "# $(date '+%H:%M:%S') [pip cache purge] >> pip cache purge -q" >>"$LOG_FILE"
+      local rc=0
+      pip cache purge -q 2>&1 \
+        | tee -a "$LOG_FILE" \
+        | awk '!/^WARNING: No matching packages$/'
+      rc="${PIPESTATUS[0]}"
+      if (( rc != 0 )); then STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 )); fi
+    fi
   fi
 
   if command -v gem >/dev/null 2>&1; then
@@ -594,15 +661,34 @@ step_docker() {
     return 1
   fi
 
+  # Safety: avoid pruning a remote Docker context.
+  local ctx host
+  ctx="$(docker context show 2>/dev/null || true)"
+  host="$(docker context inspect "${ctx:-default}" --format '{{ (index .Endpoints "docker").Host }}' 2>/dev/null || true)"
+  if [[ -n "$host" ]] && [[ "$host" != unix://* ]]; then
+    warn "docker context '${ctx:-?}' points to non-local host (${host}) — skipping prune"
+    return 0
+  fi
+
   # Size before
-  local before
+  local before after
   before="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null | awk -F'\t' '{print $1": "$2}' | paste -sd ', ' - || echo 'unknown')"
   printf "  docker disk usage: %s%s%s\n" "$C_DIM" "$before" "$C_RESET"
 
-  run_cmd "docker system prune -af --volumes" docker system prune -af --volumes \
-    || warn "'docker system prune' failed"
+  # Keep tagged images, remove only dangling (<none>) ones.
+  run_cmd "docker container prune -f" docker container prune -f \
+    || warn "'docker container prune' failed"
+  run_cmd "docker network prune -f" docker network prune -f \
+    || warn "'docker network prune' failed"
+  run_cmd "docker volume prune -f" docker volume prune -f \
+    || warn "'docker volume prune' failed"
+  run_cmd "docker image prune -f" docker image prune -f \
+    || warn "'docker image prune' failed"
   run_cmd "docker builder prune -af"          docker builder prune -af \
     || warn "'docker builder prune' failed"
+
+  after="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null | awk -F'\t' '{print $1": "$2}' | paste -sd ', ' - || echo 'unknown')"
+  printf "  docker disk usage after: %s%s%s\n" "$C_DIM" "$after" "$C_RESET"
 }
 
 step_xcode() {
@@ -678,7 +764,12 @@ step_brew() {
   run_cmd     "brew update"         brew update    || warn "'brew update' had issues"
   # Cask upgrades may prompt for sudo; run attached to the TTY so the prompt
   # is visible and the user can answer it.
-  run_cmd_tty "brew upgrade"        brew upgrade   || warn "'brew upgrade' had issues"
+  if ! run_cmd_tty "brew upgrade" brew upgrade; then
+    warn "'brew upgrade' had issues"
+    if grep -q "Command Line Tools are too outdated" "$LOG_FILE" 2>/dev/null; then
+      warn "Homebrew reports Xcode Command Line Tools are outdated. Update via System Settings → Software Update, or: sudo rm -rf /Library/Developer/CommandLineTools && sudo xcode-select --install"
+    fi
+  fi
 
   if (( BREW_GREEDY )); then
     run_cmd_tty "brew upgrade --cask --greedy" brew upgrade --cask --greedy \
@@ -689,36 +780,32 @@ step_brew() {
     info "skipping '--greedy' cask upgrades; pass --brew-greedy to include them"
   fi
 
-  run_cmd "brew cleanup -s"        brew cleanup -s             || warn "'brew cleanup' had issues"
+  # brew cleanup may emit "Warning: Skipping <formula>: most recent version ... not installed"
+  # in verbose mode; it's harmless and noisy, so filter it from the terminal while keeping
+  # the full output in the log.
+  if (( VERBOSE )); then
+    echo "# $(date '+%H:%M:%S') [brew cleanup -s] >> brew cleanup -s" >>"$LOG_FILE"
+    local rc=0
+    brew cleanup -s 2>&1 \
+      | tee -a "$LOG_FILE" \
+      | awk '!/^Warning: Skipping .*most recent version .* not installed$/'
+    rc="${PIPESTATUS[0]}"
+    if (( rc != 0 )); then STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 )); fi
+  else
+    run_cmd "brew cleanup -s" brew cleanup -s || warn "'brew cleanup' had issues"
+  fi
   run_cmd "brew autoremove"        brew autoremove             || warn "'brew autoremove' had issues"
   if (( VERBOSE )); then
     run_cmd "brew doctor" brew doctor || warn "'brew doctor' reports issues — see log"
   fi
 }
 
-# The version managers themselves (pyenv/tfenv/goenv/tenv/mise/helm,
+# The version managers themselves (pyenv/tfenv/goenv/tenv/helm,
 # gcloud-cli cask) are already upgraded by the brew step above. The steps
 # below refresh what sits on top of them; each is intentionally isolated so
 # it can be skipped independently (and so failures don't mask each other).
 # None of them auto-install new Python/Go/Terraform majors — that's an
 # explicit action best left to install_devtools.sh.
-
-# mise: self-update the binary (no-op when brew-managed), refresh the plugin
-# registry, then upgrade every mise-managed tool within its pinned spec.
-step_mise() {
-  if ! command -v mise >/dev/null 2>&1; then
-    info "mise not installed — nothing to refresh"
-    return 0
-  fi
-  # self-update is a no-op (and non-zero) when mise was installed via brew;
-  # treat that as informational, not a warning.
-  run_cmd "mise self-update" mise self-update \
-    || info "'mise self-update' not applicable (brew-managed mise is updated by brew step)"
-  run_cmd "mise plugins update" mise plugins update \
-    || warn "'mise plugins update' had issues"
-  run_cmd "mise upgrade"        mise upgrade \
-    || warn "'mise upgrade' had issues"
-}
 
 # Helm plugins are outside of brew's world, so they go stale quickly.
 # 'helm plugin update <name>' pulls the latest release for each one.
@@ -757,6 +844,13 @@ step_gcloud() {
   fi
   run_cmd "gcloud components update --quiet" gcloud components update --quiet \
     || warn "'gcloud components update' had issues"
+
+  # Some gcloud installs on macOS require a separate Python/runtime update step.
+  # Best-effort: if it exists, run it to avoid the recurring warning.
+  if gcloud help components update-macos-python >/dev/null 2>&1; then
+    run_cmd "gcloud components update-macos-python" gcloud components update-macos-python --quiet \
+      || warn "'gcloud components update-macos-python' had issues"
+  fi
 }
 
 # Report currently-active managed versions so the user can see what's in use.
@@ -821,12 +915,11 @@ run_or_skip "Flush DNS cache"                      "$SKIP_DNS"         step_dns
 run_or_skip "Clear system caches"                  "$SKIP_SYSCACHES"   step_syscaches
 run_or_skip "Clear user caches"                    "$SKIP_USERCACHES"  step_usercaches
 run_or_skip "Empty trash"                          "$SKIP_TRASH"       step_trash
-run_or_skip "Dev-tool caches"                      "$SKIP_DEVCACHES"   step_devcaches
 run_or_skip "Docker / OrbStack prune"              "$SKIP_DOCKER"      step_docker
 run_or_skip "Xcode extras"                         "$SKIP_XCODE"       step_xcode
 run_or_skip "Diagnostic / crash reports"           "$SKIP_DIAGNOSTICS" step_diagnostics
 run_or_skip "Homebrew update / upgrade / cleanup"  "$SKIP_BREW"         step_brew
-run_or_skip "mise refresh"                         "$SKIP_MISE"         step_mise
+run_or_skip "Dev-tool caches"                      "$SKIP_DEVCACHES"   step_devcaches
 run_or_skip "Helm plugin refresh"                  "$SKIP_HELM_PLUGINS" step_helm_plugins
 run_or_skip "gcloud components update"             "$SKIP_GCLOUD"       step_gcloud
 run_or_skip "Active tool versions"                 "$SKIP_VERSIONS"     step_versions
@@ -865,7 +958,24 @@ print_group() {
 (( ${#STEPS_FAIL[@]} > 0 )) && print_group "Failed"  "$C_RED"    "${STEPS_FAIL[@]}"
 
 echo
-info "full log: $LOG_FILE"
+if (( ${#STEPS_FAIL[@]} > 0 || ${#STEPS_WARN[@]} > 0 )); then
+  PERSISTENT_LOG_DIR="$HOME/Library/Logs/stay_fresh"
+  mkdir -p "$PERSISTENT_LOG_DIR"
+  SAVED_LOG="$PERSISTENT_LOG_DIR/$(basename "$LOG_FILE")"
+  if cp "$LOG_FILE" "$SAVED_LOG" 2>/dev/null; then
+    rm -f "$LOG_FILE"
+  else
+    SAVED_LOG="$LOG_FILE"
+  fi
+  # keep only the 10 most recent logs
+  find "$PERSISTENT_LOG_DIR" -name 'stay_fresh-*.log' -type f \
+    | sort -r | tail -n +11 | xargs rm -f 2>/dev/null || true
+  warn "log saved: $SAVED_LOG"
+  printf "  %sTo inspect:%s tail -80 '%s'\n" "$C_DIM" "$C_RESET" "$SAVED_LOG"
+else
+  rm -f "$LOG_FILE"
+  info "run clean — log discarded"
+fi
 
 if (( ${#STEPS_FAIL[@]} > 0 )); then
   exit 1

@@ -104,6 +104,12 @@ update probe), `change_WIFI_pw` (touches wireless profiles), `backup`
 CHR is a MikroTik product; downloads happen at build time directly from
 MikroTik. Use per [CHR licensing](https://help.mikrotik.com/docs/display/ROS/Cloud+Hosted+Router).
 
+## See also
+
+- [`../README.md`](../README.md) — RouterOS runbook, policies, and scheduler hints.
+- [`../../macos-initial-setup/README.md`](../../macos-initial-setup/README.md#development--docker-checks) — **macOS** setup scripts: Docker-based `bash`/`shellcheck` checks (separate from this CHR test stack).
+- [Repository root `README.md`](../../README.md#testing-docker) — overview of both Docker test paths.
+
 ## Credits
 
 The QEMU‑in‑Docker pattern (Alpine + official VDI → qcow2 + user networking)

@@ -35,8 +35,8 @@ services:
 
   tester:
     build:
-      context: ./tester
-      dockerfile: Dockerfile
+      context: ./
+      dockerfile: tester/Dockerfile
     image: pretty-useful-mikrotik-tester:1
     container_name: pretty-useful-mikrotik-tester
     depends_on:
