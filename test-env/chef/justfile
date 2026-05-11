@@ -37,6 +37,12 @@ fix:
 yamllint:
     {{run}} yamllint -c .yamllint .
 
+# Lint the test-env scaffolding itself (shell scripts + Dockerfile + YAML).
+lint-env:
+    {{run}} shellcheck run.sh docker/entrypoint.sh
+    {{run}} hadolint docker/Dockerfile
+    {{run}} yamllint -c .yamllint docker/docker-compose.yml kitchen.yml
+
 # Run ChefSpec unit tests (fast — no containers spun up).
 spec:
     {{run}} rspec cookbooks
@@ -54,8 +60,8 @@ verify SUITE="all":
 destroy SUITE="all":
     {{run}} kitchen destroy {{SUITE}}
 
-# Full local CI loop: lint → yamllint → spec → kitchen verify (matches CI + verify).
-ci: lint yamllint spec
+# Full local CI loop: env-lint → lint → yamllint → spec → kitchen verify.
+ci: lint-env lint yamllint spec
     {{run}} kitchen verify ubuntu-2204
 
 # Interactive shell inside the running container.

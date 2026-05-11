@@ -12,12 +12,15 @@ on reducing repeat manual work.
 - MikroTik RouterOS 7.22 — scripts are RouterOS scripting language (`.lua`
   extension is just for editor highlighting).
 - Chef Infra cookbooks — Test Kitchen + Cookstyle + ChefSpec + InSpec under
-  [`test-env/chef/`](test-env/chef/) (Docker runner on the host; CI uses Ruby + pip yamllint).
-- Python 3.12 sample package — Ruff, Ruff format, pytest, and optional mypy under
-  [`test-env/python/`](test-env/python/) (Docker dev container; CI uses `setup-python` only).
-- Go 1.23 sample module — `go test`, golangci-lint, goimports, govulncheck under
-  [`test-env/go/`](test-env/go/) (Docker dev container; wire Actions via
-  `.github/workflows/go.yml` when you want CI).
+  [`test-env/chef/`](test-env/chef/) (Docker runner on the host).
+- Python 3.12 sample package — Ruff, Ruff format, pytest, and mypy under
+  [`test-env/python/`](test-env/python/) (Docker dev container).
+- Go 1.23 sample module — `go test`, golangci-lint, goimports, govulncheck
+  under [`test-env/go/`](test-env/go/) (Docker dev container).
+
+All three test-envs also lint their own scaffolding (run.sh, Dockerfile,
+compose YAML) via **shellcheck**, **hadolint**, and **yamllint** — surfaced
+uniformly as `just lint-env`.
 
 ## Contents
 
@@ -220,17 +223,16 @@ flows:
 ```bash
 cd test-env/chef
 ./run.sh cookstyle --display-cop-names cookbooks   # lint (same as CI)
-./run.sh yamllint -c .yamllint .                   # YAML (CI uses host pip)
+./run.sh yamllint -c .yamllint .                   # YAML
 ./run.sh rspec cookbooks                           # ChefSpec (same as CI)
 ./run.sh kitchen verify                            # integration (Docker + socket)
 ```
 
 Task shortcuts and the full layout are in
-[`test-env/chef/README.md`](test-env/chef/README.md). GitHub Actions runs
-**Cookstyle, yamllint, and ChefSpec** on pushes and pull requests that touch
-`test-env/chef/**` (see [`.github/workflows/chef.yml`](.github/workflows/chef.yml));
-**Kitchen verify** is intended for local machines with Docker because it needs the
-Docker socket and privileged dokken containers.
+[`test-env/chef/README.md`](test-env/chef/README.md). The fast local gate is
+`just ci` (lint-env + lint + yamllint + spec), and `kitchen verify` is intended
+for machines with Docker socket access because dokken starts privileged sibling
+containers.
 
 ## Python package test env
 
@@ -247,10 +249,9 @@ cd test-env/python
 ```
 
 Task shortcuts and the full layout are in
-[`test-env/python/README.md`](test-env/python/README.md). GitHub Actions runs
-**Ruff** (`ruff check`, `ruff format --check`) and **pytest** on pushes and pull
-requests that touch `test-env/python/**` (see
-[`.github/workflows/python.yml`](.github/workflows/python.yml)).
+[`test-env/python/README.md`](test-env/python/README.md). Use `just ci` for the
+local full gate: `lint-env`, `ruff check`, `ruff format --check`, `mypy`, and
+`pytest`.
 
 ## Go module test env
 
@@ -266,5 +267,4 @@ cd test-env/go
 
 Task shortcuts and cache layout are in [`test-env/go/README.md`](test-env/go/README.md).
 Use **`just ci`** for the full local gate (`go vet`, lint, format check, tests,
-vulnerability scan). If [`.github/workflows/go.yml`](.github/workflows/go.yml)
-exists in your clone, it defines the GitHub Actions job for `test-env/go/**`.
+vulnerability scan).

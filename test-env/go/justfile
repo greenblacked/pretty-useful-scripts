@@ -46,6 +46,12 @@ vet:
 lint:
     {{run}} golangci-lint run
 
+# Lint the test-env scaffolding (shell scripts + Dockerfile + YAML).
+lint-env:
+    {{run}} shellcheck run.sh
+    {{run}} hadolint docker/Dockerfile
+    {{run}} yamllint docker/docker-compose.yml .golangci.yml
+
 # golangci-lint with autofix where possible.
 fix:
     {{run}} golangci-lint run --fix
@@ -71,7 +77,7 @@ hello *ARGS:
     {{run}} go run ./cmd/hello {{ARGS}}
 
 # Full local CI loop.
-ci: vet lint format-check test vuln
+ci: lint-env vet lint format-check test vuln
 
 # Interactive shell inside the running container.
 shell:

@@ -1,9 +1,10 @@
 # Go test environment
 
 Develop and run checks in **Docker** so your laptop does not need a local Go
-toolchain. The image ships **Go 1.23**, **golangci-lint**, **goimports**, and
-**govulncheck**; module + build caches live in named Compose volumes so
-recompiles are quick.
+toolchain. The image ships **Go 1.23**, **golangci-lint**, **goimports**,
+**govulncheck**, plus the meta-linters **shellcheck**, **hadolint**, and
+**yamllint** for the test-env scaffolding itself. Module + build caches live
+in named Compose volumes so recompiles are quick.
 
 The stack keeps a **long-running dev container** so every `run.sh` invocation
 `docker compose exec`s into it — milliseconds, not seconds.
@@ -16,7 +17,7 @@ The stack keeps a **long-running dev container** so every `run.sh` invocation
 | --- | --- |
 | [`run.sh`](run.sh) | Entrypoint. Subcommands: `up`/`down`/`logs`/`ps`/`shell`. Flags: `--once`, `--rebuild`. |
 | [`justfile`](justfile) | Shortcuts: `just up`, `just test`, `just lint`, `just ci`, … |
-| [`docker/Dockerfile`](docker/Dockerfile) | `golang:1.23-bookworm` + golangci-lint + goimports + govulncheck |
+| [`docker/Dockerfile`](docker/Dockerfile) | `golang:1.23-bookworm` + golangci-lint + goimports + govulncheck + **shellcheck / hadolint / yamllint** |
 | [`docker/docker-compose.yml`](docker/docker-compose.yml) | Long-running `dev` service, `go-mod-cache` + `go-build-cache` volumes |
 | [`.golangci.yml`](.golangci.yml) | Lint config (errcheck, staticcheck, gosec, revive, …) |
 | [`go.mod`](go.mod) | Module — `github.com/pretty-useful-scripts/test-env/go` |
@@ -44,6 +45,9 @@ From **`test-env/go`**:
 ./run.sh golangci-lint run
 ./run.sh govulncheck ./...
 ./run.sh go run ./cmd/hello dock  # try the sample binary
+./run.sh shellcheck run.sh        # lint the scaffolding itself
+./run.sh hadolint docker/Dockerfile
+./run.sh yamllint docker/docker-compose.yml .golangci.yml
 ./run.sh shell                    # interactive bash
 ./run.sh down
 ```
@@ -55,12 +59,13 @@ just up           # start container
 just build        # go build ./...
 just test         # go test -race
 just cov          # coverage report
-just lint         # golangci-lint
+just lint         # golangci-lint (Go source)
+just lint-env     # shellcheck + hadolint + yamllint (scaffolding)
 just vet          # go vet
 just format       # goimports -w
 just vuln         # govulncheck
 just tidy         # go mod tidy
-just ci           # vet + lint + format-check + test + vuln
+just ci           # lint-env + vet + lint + format-check + test + vuln
 just hello docker # run the sample binary
 just shell
 just down
@@ -90,15 +95,19 @@ modules.
 
 ---
 
-## CI vs local
+## Linters
 
-Local parity with automation is usually **`just ci`** inside Docker: **`go vet`**
-→ **golangci-lint** → **goimports format check** → **`go test -race`** →
-**`govulncheck`**.
+| Target | Tool | Recipe |
+| --- | --- | --- |
+| Go source | golangci-lint (errcheck, staticcheck, gosec, revive, …) | `just lint` |
+| Go format | gofmt + goimports | `just format-check` / `just format` |
+| Static analysis | `go vet` | `just vet` |
+| Vulnerabilities | govulncheck | `just vuln` |
+| Shell scripts (`run.sh`) | shellcheck | `just lint-env` |
+| Dockerfile | hadolint | `just lint-env` |
+| YAML (`docker-compose.yml`, `.golangci.yml`) | yamllint | `just lint-env` |
 
-If the repository ships **[`.github/workflows/go.yml`](../../.github/workflows/go.yml)**,
-use that file for the exact GitHub Actions matrix and triggers; otherwise run
-`just ci` before pushing.
+`just ci` chains them all together with the tests.
 
 ---
 

@@ -29,6 +29,12 @@ rebuild:
 lint:
     {{run}} ruff check .
 
+# Lint the test-env scaffolding (shell scripts + Dockerfile + YAML).
+lint-env:
+    {{run}} shellcheck run.sh
+    {{run}} hadolint docker/Dockerfile
+    {{run}} yamllint docker/docker-compose.yml
+
 # Ruff auto-fix where possible.
 fix:
     {{run}} ruff check --fix .
@@ -53,8 +59,8 @@ test:
 cov:
     {{run}} pytest --cov=sample --cov-report=term-missing
 
-# Full local CI loop: lint + format check + typecheck + tests.
-ci: lint format-check typecheck test
+# Full local CI loop: env-lint + lint + format check + typecheck + tests.
+ci: lint-env lint format-check typecheck test
 
 # Interactive shell inside the running container.
 shell:

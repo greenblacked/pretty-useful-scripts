@@ -2,8 +2,9 @@
 
 Develop and run checks in **Docker** so your laptop does not need a local Python
 toolchain. The image ships **Python 3.12**, **Ruff** (lint + formatter),
-**pytest**, and **mypy**; your code lives under [`src/`](src/) (sample package
-**`sample`**) and [`tests/`](tests/).
+**pytest**, **mypy**, and the meta-linters **shellcheck**, **hadolint**, and
+**yamllint** for the test-env scaffolding itself. Your code lives under
+[`src/`](src/) (sample package **`sample`**) and [`tests/`](tests/).
 
 The Compose stack keeps a **long-running dev container** so every `run.sh`
 invocation `docker compose exec`s into it — milliseconds, not seconds.
@@ -16,7 +17,7 @@ invocation `docker compose exec`s into it — milliseconds, not seconds.
 | --- | --- |
 | [`run.sh`](run.sh) | Entrypoint. Subcommands: `up`/`down`/`logs`/`ps`/`shell`. Flags: `--once`, `--rebuild`. |
 | [`justfile`](justfile) | Shortcuts: `just up`, `just lint`, `just test`, `just ci`, … |
-| [`docker/Dockerfile`](docker/Dockerfile) | `python:3.12-slim-bookworm`, cached `pip install -e ".[dev]"` |
+| [`docker/Dockerfile`](docker/Dockerfile) | `python:3.12-slim-bookworm`, cached `pip install -e ".[dev]"`, **shellcheck / hadolint / yamllint** baked in |
 | [`docker/docker-compose.yml`](docker/docker-compose.yml) | Long-running `dev` service, `pip-cache` named volume |
 | [`pyproject.toml`](pyproject.toml) | Package metadata, Ruff/pytest/mypy settings, **`dev`** extras |
 | [`.devcontainer/`](.devcontainer/) | VS Code / Cursor dev container (same image) |
@@ -40,7 +41,10 @@ From **`test-env/python`**:
 ./run.sh pytest -q                # exec inside it
 ./run.sh ruff check .
 ./run.sh ruff format --check .
-./run.sh mypy                     # optional; not run in GitHub Actions
+./run.sh mypy
+./run.sh shellcheck run.sh        # lint the scaffolding itself
+./run.sh hadolint docker/Dockerfile
+./run.sh yamllint docker/docker-compose.yml
 ./run.sh shell                    # interactive bash
 ./run.sh logs                     # tail dev container logs
 ./run.sh down                     # stop
@@ -50,11 +54,12 @@ With **`just`**:
 
 ```bash
 just up           # start container
-just lint         # ruff check
+just lint         # ruff check (source code)
+just lint-env     # shellcheck + hadolint + yamllint (test-env scaffolding)
 just test         # pytest
 just typecheck    # mypy
 just cov          # pytest with coverage
-just ci           # lint + format-check + typecheck + test
+just ci           # lint-env + lint + format-check + typecheck + test
 just shell        # interactive shell
 just down         # stop
 ```
@@ -85,17 +90,14 @@ wheels.
 
 ---
 
-## CI vs local
+## Linters
 
-| Step | GitHub Actions | Local (Docker) |
+| Target | Tool | Recipe |
 | --- | --- | --- |
-| Ruff lint (`ruff check`) | Yes | `./run.sh ruff check .` or `just lint` |
-| Ruff format (`ruff format --check`) | Yes | `./run.sh ruff format --check .` or `just format-check` |
-| pytest | Yes | `./run.sh pytest -q` or `just test` |
-| mypy | No (run locally) | `./run.sh mypy` or `just typecheck` |
+| Python source | Ruff (`ruff check`, `ruff format`) | `just lint` / `just format-check` |
+| Type checking | mypy | `just typecheck` |
+| Shell scripts (`run.sh`) | shellcheck | `just lint-env` |
+| Dockerfile | hadolint | `just lint-env` |
+| YAML (`docker-compose.yml`) | yamllint | `just lint-env` |
 
-When the workflow is present in the tree, it lives at
-**[`.github/workflows/python.yml`](../../.github/workflows/python.yml)** and
-runs on pushes and pull requests that touch `test-env/python/**` (and on pushes
-to `master` / `dev` when those branches are configured there).
-
+`just ci` runs all of the above (plus tests) in one go.

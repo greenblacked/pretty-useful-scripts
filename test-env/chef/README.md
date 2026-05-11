@@ -5,10 +5,11 @@ Cookbooks are exercised with [Test Kitchen](https://kitchen.ci/) using the
 Chef is pre-installed in upstream `dokken/*` images, so converges are faster
 than a plain `kitchen-docker` flow.
 
-**Cookstyle** (RuboCop rules for Chef), **yamllint**, **ChefSpec**, and
-**InSpec** (via Kitchen) all run from the same **Docker runner** on your
-machine. The host only needs **Docker Engine + Compose v2**; you do not need
-Ruby, Bundler, or pip installed locally for the default workflow.
+**Cookstyle** (RuboCop rules for Chef), **ChefSpec**, and **InSpec** (via
+Kitchen) lint and test the cookbooks themselves. Meta-linters **shellcheck**,
+**hadolint**, and **yamllint** keep the test-env scaffolding (run.sh, the
+Dockerfile, compose, kitchen.yml) honest. Everything runs in the same
+**Docker runner**; the host only needs **Docker Engine + Compose v2**.
 
 ---
 
@@ -18,9 +19,9 @@ Ruby, Bundler, or pip installed locally for the default workflow.
 | --- | --- |
 | [`run.sh`](run.sh) | Primary entrypoint. Subcommands: `up`/`down`/`logs`/`ps`/`shell`. Flags: `--once`, `--rebuild`. |
 | [`justfile`](justfile) | Shortcuts: `just lint`, `just spec`, `just verify`, `just ci`, … |
-| [`docker/Dockerfile`](docker/Dockerfile) | `ruby:3.3-bookworm-slim`, build deps, **yamllint** (apt), Docker static CLI, `bundle install` |
+| [`docker/Dockerfile`](docker/Dockerfile) | `ruby:3.3-bookworm-slim`, build deps, Docker static CLI, `bundle install`, **shellcheck / hadolint / yamllint** |
 | [`docker/docker-compose.yml`](docker/docker-compose.yml) | Long-running `kitchen` service, mounts `..` → `/chef` and `/var/run/docker.sock` |
-| [`docker/entrypoint.sh`](docker/entrypoint.sh) | `bundle check \|\| bundle install`, then `bundle exec` (except `yamllint` / `docker` / `bash` / `sh`) |
+| [`docker/entrypoint.sh`](docker/entrypoint.sh) | `bundle check \|\| bundle install`, then `bundle exec` (passes `yamllint` / `shellcheck` / `hadolint` / `docker` / `bash` / `sh` straight through) |
 | [`kitchen.yml`](kitchen.yml) | dokken driver; platforms **Ubuntu 22.04/24.04**, **Debian 12**, **Rocky Linux 9**; suite `example` |
 | [`Gemfile`](Gemfile) | test-kitchen, kitchen-dokken, kitchen-inspec; Cookstyle + ChefSpec + Berkshelf in groups |
 | [`.rubocop.yml`](.rubocop.yml), [`.rspec`](.rspec) | Cookstyle + ChefSpec |
@@ -47,6 +48,8 @@ From **`test-env/chef`**:
 ./run.sh cookstyle --display-cop-names cookbooks
 ./run.sh yamllint -c .yamllint .
 ./run.sh rspec cookbooks
+./run.sh shellcheck run.sh docker/entrypoint.sh   # lint the scaffolding
+./run.sh hadolint docker/Dockerfile
 ./run.sh shell                       # interactive bash inside the runner
 ./run.sh down                        # stop
 ```
@@ -55,11 +58,12 @@ With **`just`**:
 
 ```bash
 just up          # start runner
-just lint        # Cookstyle
-just yamllint    # YAML
+just lint        # Cookstyle (cookbooks)
+just lint-env    # shellcheck + hadolint + yamllint (scaffolding)
+just yamllint    # yamllint over the whole tree
 just spec        # ChefSpec (no Kitchen containers)
 just verify      # kitchen verify (all platforms in kitchen.yml)
-just ci          # lint + yamllint + spec + kitchen verify ubuntu-2204
+just ci          # lint-env + lint + yamllint + spec + kitchen verify ubuntu-2204
 just shell       # interactive shell
 just down        # stop
 ```
@@ -77,20 +81,20 @@ Fast inner loop before Kitchen: **`just lint && just yamllint && just spec`**.
 
 ---
 
-## CI vs local
+## Linters
 
-| Layer | Where | Command (local) |
+| Target | Tool | Recipe |
 | --- | --- | --- |
-| Cookstyle | GitHub Actions + Docker runner | `./run.sh cookstyle --display-cop-names cookbooks` |
-| yamllint | GitHub Actions (pip) + Docker runner (apt package) | `./run.sh yamllint -c .yamllint .` |
-| ChefSpec | GitHub Actions + Docker runner | `./run.sh rspec cookbooks` |
-| Test Kitchen + InSpec | **Local only** (Docker socket + dokken) | `./run.sh kitchen verify` |
+| Cookbooks (Ruby) | Cookstyle | `just lint` |
+| Cookbook YAML | yamllint | `just yamllint` |
+| Unit tests | ChefSpec / RSpec | `just spec` |
+| Integration tests | Test Kitchen + InSpec | `just verify` |
+| Shell scripts (`run.sh`, `entrypoint.sh`) | shellcheck | `just lint-env` |
+| Dockerfile | hadolint | `just lint-env` |
+| YAML (`docker-compose.yml`, `kitchen.yml`) | yamllint | `just lint-env` |
 
-Workflow file: **[`.github/workflows/chef.yml`](../../.github/workflows/chef.yml)**  
-When present, it runs on pushes and pull requests that touch `test-env/chef/**`
-(and on pushes to `master` / `dev` when configured there). Kitchen is not run in
-CI because it needs DinD or a privileged runner; use `just verify` or
-`./run.sh kitchen verify` on your workstation.
+`just ci` chains the local-fast layers (lint-env → lint → yamllint → spec)
+plus one Kitchen platform.
 
 ---
 
@@ -126,7 +130,8 @@ bundle exec rspec cookbooks
 bundle exec kitchen verify
 ```
 
-Install **yamllint** yourself (`pip install yamllint`) if you want parity with CI.
+Install **yamllint**, **shellcheck**, and **hadolint** yourself if you want
+parity with the Docker runner.
 
 ---
 
