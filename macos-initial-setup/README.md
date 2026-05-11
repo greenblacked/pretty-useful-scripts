@@ -327,6 +327,8 @@ path is protected by System Integrity Protection.
 
 ### Steps
 
+Execution order matches the script (`run_or_skip`):
+
 1. Purge inactive memory (`sudo purge`).
 2. Flush the DNS cache (`dscacheutil`, `mDNSResponder`).
 3. Clear system caches (`/Library/Caches` and writable entries under
@@ -334,15 +336,19 @@ path is protected by System Integrity Protection.
 4. Clear user caches (`~/Library/Caches`, Logs, Saved State, Xcode
    DerivedData, and related paths).
 5. Empty `~/.Trash`.
-6. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
-   `go`, `cargo`).
-7. Prune Docker / OrbStack (containers, networks, volumes, builder
+6. Prune Docker / OrbStack (containers, networks, volumes, builder
    cache, and **dangling images only** — tagged images are kept).
-8. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
-9. Remove diagnostic and crash reports (user and system).
-10. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
-    `autoremove`.
-11. Run `mise self-update`, update plugins, and upgrade tools.
+7. Clean Xcode extras (Archives, DeviceSupport, obsolete simulators).
+8. Remove diagnostic and crash reports (user and system).
+9. Update and upgrade Homebrew (formulae and casks), run `cleanup` and
+   `autoremove`.
+10. Check for **macOS software updates** (`softwareupdate --list`). Pending
+    updates are printed and counted as a **warning** until you opt in with
+    `--install-updates`, which runs `softwareupdate --install --all` (may show a
+    GUI authentication dialog; some updates require a reboot when marked
+    `Restart: YES`).
+11. Clean developer-tool caches (`npm`, `yarn`, `pnpm`, `pip`, `gem`,
+    `go`, `cargo`).
 12. Update installed Helm plugins.
 13. Run `gcloud components update`.
 14. Report active versions of `pyenv`, `goenv`, `tfenv`, `tenv`, `helm`,
@@ -357,6 +363,8 @@ path is protected by System Integrity Protection.
 ./stay_fresh.sh --brew-greedy     # also upgrade :latest / auto_updates casks
 ./stay_fresh.sh --no-sudo         # skip every step that requires sudo
 ./stay_fresh.sh --skip-devtools   # skip all dev-tool refresh steps at once
+./stay_fresh.sh --skip-updates    # skip the macOS software update check
+./stay_fresh.sh --install-updates # apply pending macOS updates (see Options)
 ```
 
 ### Options
@@ -368,18 +376,19 @@ path is protected by System Integrity Protection.
 | `-v`, `--verbose` | Stream per-step output live. |
 | `--no-sudo` | Skip `purge`, DNS flush, system caches, and system diagnostics. |
 | `--brew-greedy` | Upgrade casks that self-update (`auto_updates true`, `:latest`). |
-| `--skip-devtools` | Shorthand for `--skip-mise --skip-helm-plugins --skip-gcloud --skip-versions`. |
+| `--skip-devtools` | Shorthand for `--skip-helm-plugins --skip-gcloud --skip-versions`. |
 | `--skip-memory` | Skip the `sudo purge` step. |
 | `--skip-dns` | Skip the DNS cache flush. |
 | `--skip-syscaches` | Skip system-cache cleanup. |
 | `--skip-usercaches` | Skip user-cache cleanup. |
 | `--skip-trash` | Skip emptying `~/.Trash`. |
 | `--skip-brew` | Skip Homebrew update/upgrade/cleanup. |
+| `--skip-updates` | Skip the macOS software update step (`softwareupdate`). |
+| `--install-updates` | After listing updates, run `softwareupdate --install --all` instead of stopping with a warning. May prompt for authentication; reboot if an update requires it. |
 | `--skip-devcaches` | Skip `npm`/`yarn`/`pnpm`/`pip`/`gem`/`go`/`cargo` cache cleanup. |
 | `--skip-docker` | Skip Docker / OrbStack prune. |
 | `--skip-xcode` | Skip Xcode extras cleanup. |
 | `--skip-diagnostics` | Skip diagnostic and crash-report cleanup. |
-| `--skip-mise` | Skip `mise` update. |
 | `--skip-helm-plugins` | Skip Helm plugin updates. |
 | `--skip-gcloud` | Skip `gcloud components update`. |
 | `--skip-versions` | Skip the final version report. |
@@ -541,6 +550,7 @@ and `zsh`, mounts the repo read-only at `/repo`, and runs
 | ShellCheck | `--severity=error` for the bash scripts. Debian’s stock ShellCheck may not ship a `zsh` dialect — the harness then **skips** `zsh` ShellCheck but still **sources** `zsh_aliases.zsh` in `zsh`. |
 | CLI | `--help` succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`; an unknown `install_apps.sh` flag returns exit **3** (before preflight). |
 | Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` — preflight always runs first. |
+| `stay_fresh.sh --skip-updates` | On Linux, `--skip-updates --dry-run` must exit **2** (known flag), not **3** (unknown option), so new skip flags are covered by CI. |
 | `zsh_aliases.zsh` | `zsh -f -c "source …"` must not error. |
 
 This is **not** a substitute for `--dry-run` on a real Mac: there is no
@@ -603,8 +613,9 @@ Homebrew / `pyenv` / `goenv` commands.
     daemon (non-`unix://…` host), to avoid cleaning a remote engine by mistake.
 - Upgrades Homebrew formulae and casks (greedy upgrade only with
   `--brew-greedy`).
-- Updates `mise`, Helm plugins, and `gcloud` components when those
-  tools are installed.
+- Calls `softwareupdate --list` (and optionally `softwareupdate --install --all`
+  with `--install-updates`); skip entirely with `--skip-updates`.
+- Updates Helm plugins and `gcloud` components when those tools are installed.
 - Writes `/tmp/stay_fresh-YYYYMMDD-HHMMSS.log`.
 - Does **not** modify any shell configuration files.
 

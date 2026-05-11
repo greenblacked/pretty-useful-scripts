@@ -20,6 +20,7 @@
 #                   [--skip-usercaches] [--skip-trash] [--skip-brew]
 #                   [--skip-devcaches] [--skip-docker]
 #                   [--skip-xcode] [--skip-diagnostics]
+#                   [--skip-updates] [--install-updates]
 #                   [--no-sudo] [--help]
 #
 # Exit codes:
@@ -79,6 +80,8 @@ SKIP_DOCKER=0
 SKIP_XCODE=0
 SKIP_DIAGNOSTICS=0
 BREW_GREEDY=0
+INSTALL_UPDATES=0
+SKIP_UPDATES=0
 
 LOG_DIR="${TMPDIR:-/tmp}"
 LOG_FILE="$LOG_DIR/stay_fresh-$(date +%Y%m%d-%H%M%S).log"
@@ -129,6 +132,8 @@ ${C_BOLD}Step toggles (skip individual steps):${C_RESET}
   --skip-docker          Don't prune Docker / OrbStack
   --skip-xcode           Don't clean Xcode Archives/DeviceSupport/simulators
   --skip-diagnostics     Don't remove crash / diagnostic reports (see Notes)
+  --skip-updates         Skip the macOS software update check
+  --install-updates      Apply all pending macOS updates (default: list only)
 
 ${C_BOLD}Notes:${C_RESET}
   Diagnostic / crash reports: always runs as your user (clears
@@ -139,6 +144,10 @@ ${C_BOLD}Notes:${C_RESET}
   Homebrew: runs brew update; brew upgrade (formulae, then casks); brew cleanup -s;
   brew autoremove; brew doctor only when --verbose. Casks may prompt for sudo during
   postinstall (--brew-greedy changes which casks upgrade).
+
+  macOS Software Update: --install-updates runs 'softwareupdate --install --all',
+  which may present a GUI authentication dialog and requires a reboot if any
+  update is marked Restart: YES.
 
 Log file: $LOG_FILE
 EOF
@@ -165,6 +174,8 @@ while (( $# > 0 )); do
     --skip-docker)     SKIP_DOCKER=1 ;;
     --skip-xcode)      SKIP_XCODE=1 ;;
     --skip-diagnostics)SKIP_DIAGNOSTICS=1 ;;
+    --skip-updates)    SKIP_UPDATES=1 ;;
+    --install-updates) INSTALL_UPDATES=1 ;;
     -h|--help)         usage; exit 0 ;;
     *)                 err "unknown option: $1"; echo; usage; exit 3 ;;
   esac
@@ -443,6 +454,9 @@ plan_line "docker / orbstack prune"           "$(( 1 - SKIP_DOCKER      ))" "ima
 plan_line "xcode extras"                      "$(( 1 - SKIP_XCODE       ))" "Archives, DeviceSupport, simulators"
 plan_line "diagnostic / crash reports"        "$(( 1 - SKIP_DIAGNOSTICS ))" "user (+ system if sudo)"
 plan_line "homebrew update/upgrade/cleanup"   "$(( 1 - SKIP_BREW        ))" "brew update · upgrade · cleanup -s · autoremove"
+_swu_extra="softwareupdate --list"
+(( INSTALL_UPDATES )) && _swu_extra="softwareupdate --install --all"
+plan_line "macOS software update"             "$(( 1 - SKIP_UPDATES     ))" "$_swu_extra"
 plan_line "dev-tool caches"                   "$(( 1 - SKIP_DEVCACHES   ))" "npm/yarn/pnpm/pip/gem/go"
 plan_line "helm plugin refresh"               "$(( 1 - SKIP_HELM_PLUGINS))" "helm plugin update <name>"
 plan_line "gcloud components update"          "$(( 1 - SKIP_GCLOUD      ))" "non-brew gcloud components"
@@ -800,6 +814,89 @@ step_brew() {
   fi
 }
 
+step_softwareupdate() {
+  if ! command -v softwareupdate >/dev/null 2>&1; then
+    warn "softwareupdate not found on PATH — skipping"
+    STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    return 0
+  fi
+
+  info "checking for macOS software updates (network call, may be slow)..."
+  local su_out rc=0
+  su_out="$(softwareupdate --list 2>&1)" || rc=$?
+  echo "# softwareupdate --list output" >>"$LOG_FILE"
+  printf '%s\n' "$su_out" >>"$LOG_FILE"
+
+  if (( rc != 0 )); then
+    warn "softwareupdate --list exited $rc — cannot determine update status"
+    STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    return 0
+  fi
+
+  if grep -q "No new software available" <<< "$su_out"; then
+    ok "macOS is up to date"
+    return 0
+  fi
+
+  local update_count restart_required=0
+  update_count="$(grep -c '^\s*\*' <<< "$su_out" || true)"
+  grep -q "Restart: YES" <<< "$su_out" && restart_required=1
+
+  printf "  %sPending updates (%d):%s\n" "$C_YELLOW" "$update_count" "$C_RESET"
+  local _in_entry=0 _parsed_any=0 _title="" _version="" _size_str="" _size_kib=0 _size_human="" _restart_tag=""
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*\*[[:space:]] ]]; then
+      _in_entry=1
+    elif (( _in_entry )) && [[ "$line" == *Title:* ]]; then
+      _in_entry=0; _parsed_any=1
+      _title="$(  sed -E 's/.*Title: ([^,]+).*/\1/'   <<< "$line")"
+      _version="$(sed -E 's/.*Version: ([^,]+).*/\1/' <<< "$line")"
+      _size_str="$(sed -E 's/.*Size: ([^,]+).*/\1/'   <<< "$line")"
+      if [[ "$_size_str" =~ ^([0-9]+)KiB$ ]]; then
+        _size_kib="${BASH_REMATCH[1]}"
+        _size_human="$(human_bytes $(( _size_kib * 1024 )))"
+      else
+        _size_human="$_size_str"
+      fi
+      _restart_tag=""
+      [[ "$line" == *'Restart: YES'* ]] && _restart_tag="  ${C_YELLOW}↺ restart${C_RESET}"
+      printf "  %s•%s %-40s %s%-10s%s  %s%s%s%s\n" \
+        "$C_CYAN" "$C_RESET" \
+        "$_title" \
+        "$C_DIM" "$_version" "$C_RESET" \
+        "$C_DIM" "$_size_human" "$C_RESET" \
+        "$_restart_tag"
+    else
+      _in_entry=0
+    fi
+  done <<< "$su_out"
+  if (( _parsed_any == 0 )); then
+    while IFS= read -r line; do
+      [[ "$line" =~ ^[[:space:]]*\* ]] || continue
+      printf "  %s%s%s\n" "$C_DIM" "$line" "$C_RESET"
+    done <<< "$su_out"
+  fi
+
+  (( restart_required )) && warn "one or more updates require a restart"
+
+  if (( INSTALL_UPDATES == 0 )); then
+    info "pass --install-updates to apply these updates"
+    STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    return 0
+  fi
+
+  if ! run_cmd_tty "softwareupdate --install --all" softwareupdate --install --all; then
+    warn "softwareupdate --install --all exited non-zero — check log"
+    return 1
+  fi
+
+  if (( restart_required )); then
+    warn "updates installed — a restart is required to complete the process"
+  else
+    ok "all updates installed"
+  fi
+}
+
 # The version managers themselves (pyenv/tfenv/goenv/tenv/helm,
 # gcloud-cli cask) are already upgraded by the brew step above. The steps
 # below refresh what sits on top of them; each is intentionally isolated so
@@ -919,6 +1016,7 @@ run_or_skip "Docker / OrbStack prune"              "$SKIP_DOCKER"      step_dock
 run_or_skip "Xcode extras"                         "$SKIP_XCODE"       step_xcode
 run_or_skip "Diagnostic / crash reports"           "$SKIP_DIAGNOSTICS" step_diagnostics
 run_or_skip "Homebrew update / upgrade / cleanup"  "$SKIP_BREW"         step_brew
+run_or_skip "macOS software update"               "$SKIP_UPDATES"      step_softwareupdate
 run_or_skip "Dev-tool caches"                      "$SKIP_DEVCACHES"   step_devcaches
 run_or_skip "Helm plugin refresh"                  "$SKIP_HELM_PLUGINS" step_helm_plugins
 run_or_skip "gcloud components update"             "$SKIP_GCLOUD"       step_gcloud

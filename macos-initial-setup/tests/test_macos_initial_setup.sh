@@ -91,6 +91,18 @@ else
   ok "skipping Linux preflight assertions (unusual host OS: $(uname -s))"
 fi
 
+# --- --skip-updates must be recognized (exit 2 on Linux, not exit 3) ---
+if [[ "$(uname -s)" == "Linux" ]]; then
+  set +e
+  out_su="$("$M/stay_fresh.sh" --skip-updates --dry-run 2>&1)"; rc_su=$?
+  set -e
+  if [[ "$rc_su" -eq 2 ]]; then
+    ok "stay_fresh.sh --skip-updates recognized (exit 2, not 3)"
+  else
+    err "stay_fresh.sh --skip-updates: expected exit 2 (macOS preflight), got $rc_su: $out_su"
+  fi
+fi
+
 # --- zsh_aliases: must source cleanly in zsh (Linux) ---
 if zsh -f -c "source '$M/zsh_aliases.zsh'"; then
   ok "zsh: source zsh_aliases.zsh"
