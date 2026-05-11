@@ -15,6 +15,9 @@ on reducing repeat manual work.
   [`test-env/chef/`](test-env/chef/) (Docker runner on the host; CI uses Ruby + pip yamllint).
 - Python 3.12 sample package — Ruff, Ruff format, pytest, and optional mypy under
   [`test-env/python/`](test-env/python/) (Docker dev container; CI uses `setup-python` only).
+- Go 1.23 sample module — `go test`, golangci-lint, goimports, govulncheck under
+  [`test-env/go/`](test-env/go/) (Docker dev container; wire Actions via
+  `.github/workflows/go.yml` when you want CI).
 
 ## Contents
 
@@ -27,6 +30,7 @@ on reducing repeat manual work.
 - [Testing (Docker)](#testing-docker)
 - [Chef cookbook test env](#chef-cookbook-test-env)
 - [Python package test env](#python-package-test-env)
+- [Go module test env](#go-module-test-env)
 
 ## What's here
 
@@ -35,7 +39,7 @@ on reducing repeat manual work.
 | [`git/`](git/) | Git helper scripts for author profiles, quick add/commit/push flows, status summaries, branch cleanup, and local Docker-based checks. |
 | [`macos-initial-setup/`](macos-initial-setup/) | Bootstrap a fresh macOS workstation, install common apps and developer tools, keep Homebrew/toolchains fresh, and load useful zsh aliases. |
 | [`mikrotik/`](mikrotik/) | RouterOS 7.x scripts for backups, WiFi password rotation, WAN-state monitoring, health checks, and Telegram notifications. |
-| [`test-env/`](test-env/) | Sandboxed test harnesses — **[`chef/`](test-env/chef/)** ([`chef/run.sh`](test-env/chef/run.sh), kitchen-dokken) and **[`python/`](test-env/python/)** ([`python/run.sh`](test-env/python/run.sh), Ruff + pytest). Index: [`test-env/README.md`](test-env/README.md). |
+| [`test-env/`](test-env/) | Sandboxed test harnesses — **[`chef/`](test-env/chef/)**, **[`python/`](test-env/python/)**, **[`go/`](test-env/go/)** (each has `run.sh`, optional `just`, `.devcontainer/`). Index: [`test-env/README.md`](test-env/README.md). |
 
 ## Quick start
 
@@ -206,6 +210,7 @@ Git and macOS folders you only need the Docker Engine and Compose v2 on the host
 | [`mikrotik/`](mikrotik/) | **Integration** tests against a real **RouterOS 7.22 CHR** in QEMU, API-driven `pytest`. | [`mikrotik/tests/README.md`](mikrotik/tests/README.md) — `./mikrotik/tests/run.sh` |
 | [`test-env/chef/`](test-env/chef/) | **Cookstyle + yamllint + ChefSpec + Test Kitchen (kitchen-dokken + InSpec)** from a Ruby image that mounts the host Docker socket (DinD-style sibling containers). | [`test-env/chef/README.md`](test-env/chef/README.md) — `cd test-env/chef && ./run.sh …` or `just …` |
 | [`test-env/python/`](test-env/python/) | **Ruff (lint + format check) + pytest** from a Python 3.12 image; long-running `dev` service for fast `docker compose exec`. Optional **mypy** locally (`just typecheck`). | [`test-env/python/README.md`](test-env/python/README.md) — `cd test-env/python && ./run.sh …` or `just …` |
+| [`test-env/go/`](test-env/go/) | **go vet + golangci-lint + go test -race + govulncheck** (and goimports check) from a Go 1.23 image; module/build caches in Compose volumes. | [`test-env/go/README.md`](test-env/go/README.md) — `cd test-env/go && ./run.sh …` or `just …` |
 
 ## Chef cookbook test env
 
@@ -246,3 +251,20 @@ Task shortcuts and the full layout are in
 **Ruff** (`ruff check`, `ruff format --check`) and **pytest** on pushes and pull
 requests that touch `test-env/python/**` (see
 [`.github/workflows/python.yml`](.github/workflows/python.yml)).
+
+## Go module test env
+
+The Go harness lives under **[`test-env/go/`](test-env/go/)**. Typical flows:
+
+```bash
+cd test-env/go
+./run.sh up
+./run.sh go test -race -count=1 ./...
+./run.sh golangci-lint run
+./run.sh govulncheck ./...
+```
+
+Task shortcuts and cache layout are in [`test-env/go/README.md`](test-env/go/README.md).
+Use **`just ci`** for the full local gate (`go vet`, lint, format check, tests,
+vulnerability scan). If [`.github/workflows/go.yml`](.github/workflows/go.yml)
+exists in your clone, it defines the GitHub Actions job for `test-env/go/**`.

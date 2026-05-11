@@ -1,10 +1,9 @@
 # Python dev/test runner: host only needs Docker + Compose v2.
 # Use ../run.sh as the entry point.
 #
-# Two services share the same image:
-#   - dev: long-running container for `docker compose exec` workflows
-#          (`./run.sh up`, then `./run.sh <cmd>` execs into it — fast).
-#   - one-shot `run --rm` invocations still work via `./run.sh --once <cmd>`.
+# Single `dev` service: long-running container for `docker compose exec`
+# (`./run.sh up`, then `./run.sh <cmd>`). One-shot containers use
+# `./run.sh --once <cmd>` (compose `run --rm`).
 name: pretty-useful-python-dev
 
 x-common: &common

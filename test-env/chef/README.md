@@ -77,17 +77,6 @@ Fast inner loop before Kitchen: **`just lint && just yamllint && just spec`**.
 
 ---
 
-## How it works
-
-1. **`run.sh`** builds (when needed) and runs the **kitchen** Compose service.
-2. The container runs **`bundle exec`** for Ruby tools; **yamllint** is invoked
-   as a system binary (see [`docker/entrypoint.sh`](docker/entrypoint.sh)).
-3. **kitchen-dokken** uses the **host** Docker API (mounted socket) to create
-   sibling containers (privileged, systemd `pid_one_command` per
-   [`kitchen.yml`](kitchen.yml)).
-
----
-
 ## CI vs local
 
 | Layer | Where | Command (local) |
@@ -98,10 +87,21 @@ Fast inner loop before Kitchen: **`just lint && just yamllint && just spec`**.
 | Test Kitchen + InSpec | **Local only** (Docker socket + dokken) | `./run.sh kitchen verify` |
 
 Workflow file: **[`.github/workflows/chef.yml`](../../.github/workflows/chef.yml)**  
-It runs on pushes and pull requests that touch `test-env/chef/**`, and on pushes
-to `master` / `dev`. Kitchen is not run in CI because it needs DinD or a
-privileged runner; use `just verify` or `./run.sh kitchen verify` on your
-workstation.
+When present, it runs on pushes and pull requests that touch `test-env/chef/**`
+(and on pushes to `master` / `dev` when configured there). Kitchen is not run in
+CI because it needs DinD or a privileged runner; use `just verify` or
+`./run.sh kitchen verify` on your workstation.
+
+---
+
+## How it works
+
+1. **`run.sh`** builds (when needed) and runs the **kitchen** Compose service.
+2. The container runs **`bundle exec`** for Ruby tools; **yamllint** is invoked
+   as a system binary (see [`docker/entrypoint.sh`](docker/entrypoint.sh)).
+3. **kitchen-dokken** uses the **host** Docker API (mounted socket) to create
+   sibling containers (privileged, systemd `pid_one_command` per
+   [`kitchen.yml`](kitchen.yml)).
 
 ---
 

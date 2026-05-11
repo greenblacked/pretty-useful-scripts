@@ -1,9 +1,9 @@
 # Python test environment
 
 Develop and run checks in **Docker** so your laptop does not need a local Python
-toolchain. The image ships **Python 3.12**, **Ruff**, **mypy**, and **pytest**;
-your code lives under [`src/`](src/) (sample package **`sample`**) and
-[`tests/`](tests/).
+toolchain. The image ships **Python 3.12**, **Ruff** (lint + formatter),
+**pytest**, and **mypy**; your code lives under [`src/`](src/) (sample package
+**`sample`**) and [`tests/`](tests/).
 
 The Compose stack keeps a **long-running dev container** so every `run.sh`
 invocation `docker compose exec`s into it — milliseconds, not seconds.
@@ -39,8 +39,10 @@ From **`test-env/python`**:
 ./run.sh up                       # start container in the background
 ./run.sh pytest -q                # exec inside it
 ./run.sh ruff check .
-./run.sh mypy
+./run.sh ruff format --check .
+./run.sh mypy                     # optional; not run in GitHub Actions
 ./run.sh shell                    # interactive bash
+./run.sh logs                     # tail dev container logs
 ./run.sh down                     # stop
 ```
 
@@ -92,5 +94,8 @@ wheels.
 | pytest | Yes | `./run.sh pytest -q` or `just test` |
 | mypy | No (run locally) | `./run.sh mypy` or `just typecheck` |
 
-Workflow: **[`.github/workflows/python.yml`](../../.github/workflows/python.yml)**  
-Triggers on changes under `test-env/python/**` and on pushes to `master` / `dev`.
+When the workflow is present in the tree, it lives at
+**[`.github/workflows/python.yml`](../../.github/workflows/python.yml)** and
+runs on pushes and pull requests that touch `test-env/python/**` (and on pushes
+to `master` / `dev` when those branches are configured there).
+
