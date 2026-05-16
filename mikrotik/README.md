@@ -26,6 +26,13 @@ live in `/system script` on the router and are run either manually or from
 | `firewall_drift_baseline.lua`   | Manual helper that re-arms `firewall_drift` after intentional changes.  |
 | `mac_allowlist_dhcp.lua`        | Flags (and optionally blocks) DHCP leases for non-allowlisted MACs.     |
 | `rogue_dns_check.lua`           | Detects DNS upstream hijack and clients using non-approved resolvers.   |
+| `latency_monitor.lua`           | Pings a list of targets and alerts on packet loss or high RTT.          |
+| `ddns_update.lua`               | Updates a Cloudflare A record when the WAN IP changes.                  |
+| `brute_force_block.lua`         | Scans logs for repeated auth failures and auto-blocks offending IPs.    |
+| `bandwidth_spike.lua`           | Alerts when per-interface TX/RX in one interval exceeds a threshold.    |
+| `vpn_health.lua`                | Monitors IPSec / OVPN / WireGuard tunnel states and alerts on changes.  |
+| `traffic_quota.lua`             | Accumulates monthly WAN usage and alerts at configurable % thresholds.  |
+| `wireless_client_watch.lua`     | Alerts when a new device associates to any WiFi interface.              |
 
 ## Installation
 
@@ -69,6 +76,13 @@ Add via **System → Scheduler** (use the same policy set as the scripts):
 | `firewall_drift`      | `15m`                      |
 | `mac_allowlist_dhcp`  | `5m`                       |
 | `rogue_dns_check`     | `10m`                      |
+| `latency_monitor`     | `5m`                       |
+| `ddns_update`         | `5m`                       |
+| `brute_force_block`   | `1m`                       |
+| `bandwidth_spike`     | `5m`                       |
+| `vpn_health`          | `2m`                       |
+| `traffic_quota`       | `1h`                       |
+| `wireless_client_watch` | `1m`                     |
 | `notify-boot` (inline)| `start-time=startup` — see [Reboot notifications](#reboot-notifications) |
 
 `detect_internet`, `reboot-and-flush`, and `firewall_drift_baseline` are
@@ -195,6 +209,69 @@ to the right position). Refuses to do anything if `MAC_ALLOWLIST` is empty,
 to avoid accidentally locking every device out of an unconfigured router.
 Re-alerts only when the set of unknown MACs changes between runs.
 
+### `latency_monitor.lua`
+Pings a configurable list of targets (default: `8.8.8.8`, `1.1.1.1`, `9.9.9.9`) with
+`Count` probes each run. Alerts when packet loss reaches `LossThreshold` (default 40 %)
+or average RTT exceeds `RttThreshold` (default 150 ms). Uses `:global LATENCY_LAST_FLAG`
+to suppress repeat alerts while the same set of degraded targets persists. Clears the
+flag (with a log entry) when all targets recover.
+
+### `ddns_update.lua`
+Reads the current WAN IP from the configured interface, compares it to
+`:global DDNS_LAST_IP`, and skips the update when unchanged. On change, sends a Cloudflare
+API v4 `PUT` to update the A record and notifies via Telegram. Credentials
+(`CF_API_TOKEN`, `CF_ZONE_ID`, `CF_RECORD_ID`, `CF_RECORD_NAME`) can be set in the script
+or via `:global` on boot. The `CF_RECORD_ID` can be obtained from:
+```
+curl -H "Authorization: Bearer TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/ZONE_ID/dns_records"
+```
+
+### `brute_force_block.lua`
+Scans `/log` for authentication failure messages (`login failure`, `login failed`,
+`invalid user`) and extracts the source IP. Tracks failure counts in `:global BF_SEEN_LINES`
+(a line cursor) so each run only processes new log entries. When an IP hits
+`MaxFailures` (default 5) it is added to address-list `brute-force-block` with a
+`BlockTimeout` (default 1 day) and reported via Telegram. Already-blocked IPs are
+skipped on subsequent alerts. Pair with a forward/input drop rule targeting the list:
+
+```routeros
+/ip firewall filter add chain=input action=drop \
+    src-address-list=brute-force-block comment=brute-force-block disabled=yes
+```
+
+Review and enable the rule manually after adding it (the script does **not** auto-install it).
+
+### `bandwidth_spike.lua`
+Samples cumulative TX/RX byte counters on each configured interface and computes a delta
+since the previous run. Alerts when any interface delta exceeds `ThresholdMB` (default
+200 MB per interval). Counter resets caused by reboots or interface flaps produce a
+negative delta and are silently skipped. Uses `:global BW_LAST_FLAG` to suppress repeated
+alerts while the same interfaces stay over threshold.
+
+### `vpn_health.lua`
+Checks three tunnel types per run — IPSec active peers (`/ip ipsec`), OVPN clients
+(`/interface ovpn-client`), and WireGuard peers (`/interface wireguard peers`) — and
+builds a state signature. Alerts only when a tunnel's state transitions (e.g. `up -> down`
+or `down -> up`). Each check is wrapped in `on-error` so missing packages (no IPSec,
+no WireGuard) are skipped without failing the script. State is held in `:global VPN_LAST_STATE`.
+
+### `traffic_quota.lua`
+Accumulates monthly WAN interface RX+TX across reboots by persisting a running total to
+`/quota-state.txt` on every run and restoring it after boot. Resets accumulators on month
+rollover. Alerts at configurable percentage thresholds (default 80 %, 95 %, 100 %) of
+`QuotaGB` (default 1000 GB); each threshold fires at most once per month via the
+`:global QUOTA_ALERTED` flag. Set `QuotaGB` to `0` to disable alerting while keeping
+traffic logging.
+
+### `wireless_client_watch.lua`
+Polls the wireless registration table for associated client MACs not seen since the last
+boot. Supports both the legacy `/interface wireless` stack and WiFiWave2
+`/interface wifi` (toggle `UseWifiWave2`). The first run after boot silently baselines the
+currently associated clients; subsequent runs alert on newly joining MACs. Complements
+`dhcp_lease_watch` by catching devices that associate without requesting a DHCP lease.
+State is held in `:global WIFI_KNOWN_MACS`.
+
 ### `rogue_dns_check.lua`
 Two checks per run. First, it `:resolve`s a control hostname (default
 `dns.cloudflare.com`) and warns if the answer is not in `:global
@@ -218,6 +295,7 @@ surface so a noisy detector cannot brick the router:
 | `dhcp-unknown`        | `mac_allowlist_dhcp`      | DHCP lease IPs whose MAC is not on the allowlist.      |
 | `fw-drift-events`     | `firewall_drift`          | Sentinel marker `127.0.0.1` per drift event (audit trail). |
 | `rogue-dns-clients`   | `rogue_dns_check`         | Source IPs caught using non-approved DNS resolvers.    |
+| `brute-force-block`   | `brute_force_block`       | IPs with repeated authentication failures.             |
 
 Optional filter rule templates (commented out on purpose — review first,
 then apply if you want enforcement). All of them assume the lists above are
