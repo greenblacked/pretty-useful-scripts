@@ -63,7 +63,7 @@ After linking `zsh_aliases.zsh`, the same three are available as
 | `stay_fresh.sh` | Recurring maintenance: cleanup, updates, cache pruning, and version reporting. |
 | `v1_stay_fresh.sh` | Legacy minimal maintenance flow kept for reference and simple one-off runs. |
 | `zsh_aliases.zsh` | Optional interactive-shell aliases and helper functions. |
-| `tests/` | Docker-based **static** checks (ShellCheck, `bash -n`, CLI smoke tests). See [Development: Docker checks](#development--docker-checks). |
+| `tests/` | Docker-based **static** checks (ShellCheck, `bash -n`, CLI/config smoke tests, ~100 assertions). See [Development: Docker checks](#development--docker-checks). |
 
 ## Lifecycle: when to run what
 
@@ -475,9 +475,10 @@ Valid keys for `--only`: `memory`, `dns`, `syscaches`, `usercaches`, `trash`,
 ### Config file
 
 Persistent defaults live in `$XDG_CONFIG_HOME/stay_fresh/config` (falls
-back to `~/.config/stay_fresh/config`). The file is plain `KEY=value`,
-sourced before flag parsing — anything you can set as a flag you can set
-there. Run `./stay_fresh.sh --print-config` to see the parsed result.
+back to `~/.config/stay_fresh/config`). The file is plain `KEY=value`.
+Load order is: **built-in defaults → config file → CLI flags** (flags win).
+Anything you can set as a flag you can set in the config. Run
+`./stay_fresh.sh --print-config` to see the parsed result.
 
 ```bash
 # ~/.config/stay_fresh/config — example
@@ -639,9 +640,9 @@ anything you do not want, or append your own additions at the end.
 ## Development: Docker checks
 
 These scripts target macOS, but a **small Linux container** can still verify
-syntax, ShellCheck, `--help`, the documented exit codes, and that
-`zsh_aliases.zsh` sources cleanly in `zsh`. You need **Docker** with the
-**Compose v2** plugin; nothing else on the host.
+syntax, ShellCheck, CLI parsing, config loading, the documented exit codes,
+and that `zsh_aliases.zsh` sources cleanly in `zsh`. You need **Docker**
+with the **Compose v2** plugin; nothing else on the host.
 
 From the **repository root**:
 
@@ -657,23 +658,32 @@ docker compose -f macos-initial-setup/tests/docker-compose.yml run --rm tester
 
 The `tester` image (`tests/tester/Dockerfile`) installs `bash`, `shellcheck`,
 and `zsh`, mounts the repo read-only at `/repo`, and runs
-`tests/test_macos_initial_setup.sh`.
+`tests/test_macos_initial_setup.sh` (~100 `[ ok ]` lines when everything
+passes).
 
-| Check | Notes |
+### What the harness checks
+
+| Area | Notes |
 | --- | --- |
 | `bash -n` | All `*.sh` in this directory. |
 | ShellCheck | `--severity=error` for the bash scripts. Debian’s stock ShellCheck may not ship a `zsh` dialect — the harness then **skips** `zsh` ShellCheck but still **sources** `zsh_aliases.zsh` in `zsh`. |
-| CLI | `--help` succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`; an unknown `install_apps.sh` flag returns exit **3** (before preflight). |
-| Platform guard | On Linux, `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` — preflight always runs first. |
-| `stay_fresh.sh --skip-updates` and other new skip flags | On Linux, each new skip flag (`--skip-mas`, `--skip-pipx`, `--skip-rustup`, `--skip-mise`, `--skip-vscode`, `--skip-snapshots`, `--skip-launchagents`, `--quicklook-reset`, `--brewfile-snapshot`, `--refresh-updates`, `--force`, `--summary-only`, `--json`) must exit **2** (known flag), not **3** (unknown option). |
-| `stay_fresh.sh --print-config` / `--history` | Must exit **0** even on Linux — both short-circuit before the macOS preflight. |
-| `stay_fresh.sh --only <bogus>` | Must exit **3**. `--only memory,dns` on Linux must exit **2**. |
-| Conflicting flags | `--install-updates --skip-updates` must exit **3** at parse time. |
+| `--help` / `-h` | Succeeds for `install_*.sh`, `stay_fresh.sh`, and `v1_stay_fresh.sh`. |
+| Unknown flags | `install_apps.sh`, `install_devtools.sh`, and `stay_fresh.sh` return exit **3** before preflight. `install_devtools.sh --manager bogus` also exits **3**. |
+| Platform guard | On Linux, `install_*.sh` and `stay_fresh.sh` exit **2** with a “macOS only” message even with `--dry-run` (preflight runs after parse). |
+| `stay_fresh.sh` flags | Every documented `--skip-*`, mode flag, and short option (`-y`, `-v`) parses on Linux (exit **2**, not **3**). Includes `--only=docker,brew` form. |
+| `install_apps.sh` / `install_devtools.sh` flags | Representative skip/setup flags parse on Linux (exit **2**); `install_devtools.sh --manager mise` included. |
+| `stay_fresh.sh --print-config` / `--history` | Exit **0** on Linux (short-circuit before macOS preflight). Output must include the config banner or history header. |
+| `--print-config` semantics | `--skip-docker` / `--dry-run` reflected in output; `--skip-devtools` fans out to dev-tool skip flags; `--only quicklook` enables the opt-in step. |
+| Config file | With `XDG_CONFIG_HOME` pointing at a temp dir, `KEY=value` lines load after defaults; CLI flags override config (`DRY_RUN` tested). |
+| `--only` | Unknown step → exit **3**. Each valid step key tested individually. `--only brewfile-snapshot` alone → exit **3** (brew must run); `--only brew,brewfile-snapshot` → exit **2**. |
+| Conflicting flags | Exit **3** at parse time: `--install-updates` + `--skip-updates`; `--skip-brew` + `--brew-greedy` or `--brewfile-snapshot`. |
 | `zsh_aliases.zsh` | `zsh -f -c "source …"` must not error. |
 
+### What Docker does *not* cover
+
 This is **not** a substitute for `--dry-run` on a real Mac: there is no
-Homebrew, no installs, and no execution of `stay_fresh` steps. For
-RouterOS script integration tests in the same repository, see
+Homebrew, no installs, and no execution of `stay_fresh` maintenance steps.
+For RouterOS script integration tests in the same repository, see
 [`mikrotik/tests/README.md`](../mikrotik/tests/README.md).
 
 ---

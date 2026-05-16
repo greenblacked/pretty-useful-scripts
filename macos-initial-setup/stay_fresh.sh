@@ -29,9 +29,9 @@
 #
 # Config:
 #   Defaults can be set in $XDG_CONFIG_HOME/stay_fresh/config (or
-#   ~/.config/stay_fresh/config). Plain shell `KEY=value` lines, sourced
-#   before CLI parsing — anything you can set on the command line you can
-#   set there. Run with --print-config to see the parsed result.
+#   ~/.config/stay_fresh/config). Plain shell `KEY=value` lines load after
+#   built-in defaults; CLI flags override the config. Run with --print-config
+#   to see the parsed result.
 #
 # Usage:
 #   ./stay_fresh.sh [--dry-run] [--yes] [--verbose] [--summary-only]
@@ -259,7 +259,7 @@ ${C_BOLD}Notes:${C_RESET}
 
 ${C_BOLD}Config:${C_RESET}
   Defaults: $CONFIG_FILE
-  (Plain KEY=value; sourced before flag parsing. Run --print-config to inspect.)
+  (Plain KEY=value; defaults → config → flags. Run --print-config to inspect.)
 
 ${C_BOLD}Logs:${C_RESET}
   Active run:        $LOG_FILE
