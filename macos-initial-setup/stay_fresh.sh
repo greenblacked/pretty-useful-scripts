@@ -29,9 +29,9 @@
 #
 # Config:
 #   Defaults can be set in $XDG_CONFIG_HOME/stay_fresh/config (or
-#   ~/.config/stay_fresh/config). Plain shell `KEY=value` lines, sourced
-#   before CLI parsing — anything you can set on the command line you can
-#   set there. Run with --print-config to see the parsed result.
+#   ~/.config/stay_fresh/config). Plain shell `KEY=value` lines load after
+#   built-in defaults; CLI flags override the config. Run with --print-config
+#   to see the parsed result.
 #
 # Usage:
 #   ./stay_fresh.sh [--dry-run] [--yes] [--verbose] [--summary-only]
@@ -74,21 +74,6 @@ LOW_BATTERY_THRESHOLD=50                                  # %, warn below this o
 TMUTIL_SNAPSHOT_TRIGGER_BYTES=$(( 15 * 1024 * 1024 * 1024 ))  # 15 GiB
 
 PLAN_COL_WIDTH=34
-
-# ---------------------------------------------------------------------------
-# config file — sourced before CLI parsing so flags can override it
-# ---------------------------------------------------------------------------
-if [[ -r "$CONFIG_FILE" ]]; then
-  # Defensive sourcing: protect against a stray `exit` in the file. We can't
-  # fully sandbox shell sourcing, but a clearly-scoped subshell test catches
-  # the worst gotchas (set -u violations, bad redirection, syntax errors).
-  if ! ( set -u; source "$CONFIG_FILE" ) >/dev/null 2>&1; then
-    printf "warning: config file %s has issues — sourcing anyway, errors may follow\n" \
-      "$CONFIG_FILE" >&2
-  fi
-  # shellcheck disable=SC1090
-  source "$CONFIG_FILE"
-fi
 
 # ---------------------------------------------------------------------------
 # output helpers (TTY-aware colors)
@@ -162,6 +147,21 @@ QUICKLOOK_RESET=0           # opt-in: cosmetic, only on demand
 # --only filtering — populated after parsing
 ONLY_LIST=""
 ONLY_FILTER_ACTIVE=0
+
+# ---------------------------------------------------------------------------
+# config file — sourced after defaults, before CLI (flags override config)
+# ---------------------------------------------------------------------------
+if [[ -r "$CONFIG_FILE" ]]; then
+  # Defensive sourcing: protect against a stray `exit` in the file. We can't
+  # fully sandbox shell sourcing, but a clearly-scoped subshell test catches
+  # the worst gotchas (set -u violations, bad redirection, syntax errors).
+  if ! ( set -u; source "$CONFIG_FILE" ) >/dev/null 2>&1; then
+    printf "warning: config file %s has issues — sourcing anyway, errors may follow\n" \
+      "$CONFIG_FILE" >&2
+  fi
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
 
 # Registry: short key -> "SKIP_VAR step_function Step label"
 # Order matters: it defines the execution order in run_or_skip below.
@@ -259,7 +259,7 @@ ${C_BOLD}Notes:${C_RESET}
 
 ${C_BOLD}Config:${C_RESET}
   Defaults: $CONFIG_FILE
-  (Plain KEY=value; sourced before flag parsing. Run --print-config to inspect.)
+  (Plain KEY=value; defaults → config → flags. Run --print-config to inspect.)
 
 ${C_BOLD}Logs:${C_RESET}
   Active run:        $LOG_FILE
@@ -870,21 +870,31 @@ if (( USE_SUDO == 0 )); then
 fi
 
 if (( NEEDS_SUDO == 1 )) && (( DRY_RUN == 0 )); then
-  info "some steps need sudo — you may be prompted once"
-  if sudo -v; then
+  # Use an existing valid timestamp if present — avoids the prompt entirely on
+  # repeated runs within the same sudo session window.
+  if sudo -n true 2>/dev/null; then
     SUDO_AVAILABLE=1
-    ok "sudo authenticated"
-    # keep-alive (disown so EXIT kill does not print bash job "Terminated: 15" noise)
-    ( while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit; done ) &
+    ok "sudo session already active — no password needed"
+  else
+    info "some steps need sudo — you will be prompted once"
+    if sudo -v; then
+      SUDO_AVAILABLE=1
+      ok "sudo authenticated"
+    else
+      err "sudo authentication failed — disabling sudo-requiring steps"
+      SKIP_MEMORY=1
+      SKIP_DNS=1
+      SKIP_SYSCACHES=1
+      SKIP_DIAGNOSTICS_SYS=1
+    fi
+  fi
+  if (( SUDO_AVAILABLE )); then
+    # Keep-alive: refresh every 30 s so the timestamp never expires mid-run.
+    # Disown so EXIT kill does not print bash job "Terminated: 15" noise.
+    ( while true; do sudo -n true; sleep 30; kill -0 "$$" 2>/dev/null || exit; done ) &
     SUDO_KEEPALIVE_PID=$!
     disown "$SUDO_KEEPALIVE_PID" 2>/dev/null || disown || true
     # Note: on_exit (already trapped) kills $SUDO_KEEPALIVE_PID for us.
-  else
-    err "sudo authentication failed — disabling sudo-requiring steps"
-    SKIP_MEMORY=1
-    SKIP_DNS=1
-    SKIP_SYSCACHES=1
-    SKIP_DIAGNOSTICS_SYS=1
   fi
 elif (( DRY_RUN )); then
   info "(dry-run) would request sudo for memory/DNS/system-caches/diagnostics steps"
@@ -1435,8 +1445,7 @@ step_softwareupdate() {
   (( restart_required )) && warn "one or more updates require a restart"
 
   if (( INSTALL_UPDATES == 0 )); then
-    info "pass --install-updates to apply these updates"
-    STEP_WARN_COUNT=$(( STEP_WARN_COUNT + 1 ))
+    info "to install: run with --install-updates or: sudo softwareupdate --install --all"
     return 0
   fi
 
@@ -1516,7 +1525,7 @@ step_mise() {
     run_cmd "asdf update"        asdf update                   || warn "'asdf update' failed"
     run_cmd "asdf plugin update --all" asdf plugin update --all || warn "'asdf plugin update --all' failed"
   fi
-  (( touched == 0 )) && info "mise / asdf not installed — skipping"
+  if (( touched == 0 )); then info "mise / asdf not installed — skipping"; fi
 }
 
 # Update extensions for VSCode / Cursor / VSCodium when their CLIs are present.
@@ -1529,7 +1538,7 @@ step_vscode_extensions() {
         || warn "'$cli --update-extensions' failed"
     fi
   done
-  (( touched == 0 )) && info "no VSCode-family CLI on PATH — skipping"
+  if (( touched == 0 )); then info "no VSCode-family CLI on PATH — skipping"; fi
 }
 
 # Time Machine keeps "local snapshots" on / that are invisible to du and can
@@ -1725,6 +1734,15 @@ run_or_skip() {
     printf "  %sskipped%s\n" "$C_DIM" "$C_RESET"
     STEPS_SKIP+=("$label")
     return 0
+  fi
+  # Restart the keep-alive if it died (e.g. system sleep, background SIGPIPE)
+  # so sudo calls within the step never see an expired timestamp.
+  if (( SUDO_AVAILABLE )) && [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
+    if ! kill -0 "$SUDO_KEEPALIVE_PID" 2>/dev/null; then
+      ( while true; do sudo -n true; sleep 30; kill -0 "$$" 2>/dev/null || exit; done ) &
+      SUDO_KEEPALIVE_PID=$!
+      disown "$SUDO_KEEPALIVE_PID" 2>/dev/null || disown || true
+    fi
   fi
   do_step "$label" "$fn"
 }
